@@ -1,0 +1,165 @@
+import type { CollectionNode, DeleteResult } from "../../types/dead-collection-cleaner";
+
+const COLLECTIONS_QUERY = `#graphql
+  query GetCollections($first: Int!, $after: String) {
+    collections(first: $first, after: $after) {
+      nodes {
+        id
+        title
+        handle
+        productsCount {
+          count
+        }
+        ruleSet {
+          rules {
+            column
+            condition
+            relation
+          }
+        }
+        updatedAt
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+`;
+
+const DELETE_COLLECTION_MUTATION = `#graphql
+  mutation CollectionDelete($input: CollectionDeleteInput!) {
+    collectionDelete(input: $input) {
+      deletedCollectionId
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+const CREATE_REDIRECT_MUTATION = `#graphql
+  mutation UrlRedirectCreate($urlRedirect: UrlRedirectInput!) {
+    urlRedirectCreate(urlRedirect: $urlRedirect) {
+      urlRedirect {
+        id
+        fromPath
+        target
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+const ADD_PRODUCTS_TO_COLLECTION_MUTATION = `#graphql
+  mutation CollectionAddProducts($id: ID!, $productIds: [ID!]!) {
+    collectionAddProducts(id: $id, productIds: $productIds) {
+      collection {
+        id
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+type AdminClient = {
+  graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response>;
+};
+
+interface CollectionsPage {
+  data: {
+    collections: {
+      nodes: CollectionNode[];
+      pageInfo: {
+        hasNextPage: boolean;
+        endCursor: string | null;
+      };
+    };
+  };
+}
+
+export async function fetchAllCollections(admin: AdminClient): Promise<CollectionNode[]> {
+  const allCollections: CollectionNode[] = [];
+  let hasNextPage = true;
+  let cursor: string | null = null;
+
+  while (hasNextPage) {
+    const response = await admin.graphql(COLLECTIONS_QUERY, {
+      variables: { first: 250, after: cursor },
+    });
+    const json = (await response.json()) as CollectionsPage;
+    const page = json.data.collections;
+
+    allCollections.push(...page.nodes);
+    hasNextPage = page.pageInfo.hasNextPage;
+    cursor = page.pageInfo.endCursor;
+  }
+
+  return allCollections;
+}
+
+export async function deleteCollection(
+  admin: AdminClient,
+  collectionId: string,
+): Promise<DeleteResult> {
+  const response = await admin.graphql(DELETE_COLLECTION_MUTATION, {
+    variables: { input: { id: collectionId } },
+  });
+  const json = (await response.json()) as {
+    data: { collectionDelete: DeleteResult };
+  };
+  return json.data.collectionDelete;
+}
+
+export async function createUrlRedirect(
+  admin: AdminClient,
+  fromPath: string,
+  target: string,
+): Promise<{ success: boolean; error?: string }> {
+  const response = await admin.graphql(CREATE_REDIRECT_MUTATION, {
+    variables: { urlRedirect: { fromPath, target } },
+  });
+  const json = (await response.json()) as {
+    data: {
+      urlRedirectCreate: {
+        urlRedirect: { id: string; fromPath: string; target: string } | null;
+        userErrors: Array<{ field: string[]; message: string }>;
+      };
+    };
+  };
+  const result = json.data.urlRedirectCreate;
+  if (result.userErrors.length > 0) {
+    return { success: false, error: result.userErrors.map((e) => e.message).join(", ") };
+  }
+  return { success: true };
+}
+
+export async function addProductToCollection(
+  admin: AdminClient,
+  collectionId: string,
+  productId: string,
+): Promise<{ success: boolean; error?: string }> {
+  const response = await admin.graphql(ADD_PRODUCTS_TO_COLLECTION_MUTATION, {
+    variables: { id: collectionId, productIds: [productId] },
+  });
+  const json = (await response.json()) as {
+    data: {
+      collectionAddProducts: {
+        collection: { id: string } | null;
+        userErrors: Array<{ field: string[]; message: string }>;
+      };
+    };
+  };
+  const result = json.data.collectionAddProducts;
+  if (result.userErrors.length > 0) {
+    return { success: false, error: result.userErrors.map((e) => e.message).join(", ") };
+  }
+  return { success: true };
+}

@@ -58,3 +58,84 @@ Requirements:
 11. Return complete production-ready code with TypeScript types and GraphQL queries.
 
 Generate all files with folder structure.
+
+
+
+
+and also make sure to use below given stack where need -
+
+Core Stack-
+
+Framework-
+React Router 7 (Shopify App Template)
+Use file-based routing.
+Use loaders and actions for server-side operations.
+Follow Shopify embedded app architecture.
+Keep routes modular and feature-based.
+
+UI Layer -
+Shopify Polaris only.
+Use Polaris components before creating custom UI.
+Follow Shopify design guidelines.
+Ensure responsive layouts for desktop and tablet merchants.
+
+Authentication - 
+Shopify OAuth provided by Shopify App Template.
+Use existing session management from the template.
+Do not create custom authentication unless explicitly required.
+
+Shopify Integration -
+Use Shopify Admin GraphQL API (2025-01).
+Prefer GraphQL over REST.
+Use typed queries and mutations.
+All Shopify data reads and writes must go through the Admin API.
+
+AI Layer - 
+Claude API (claude-sonnet-4-6).
+AI is responsible for:
+ SEO meta title generation
+ Meta description generation
+ Product description optimization
+ Alt text generation
+ Structured data suggestions
+ SEO recommendations
+Use structured prompts.
+Validate and sanitize AI output before storing.
+
+Queue System - 
+BullMQ
+Redis
+Use queues for:
+ Bulk SEO generation
+ Bulk alt text generation
+ Long-running AI operations
+ Background processing
+Never execute large bulk jobs synchronously.
+
+Database - 
+PostgreSQL
+Drizzle ORM
+Store:
+ Keywords
+ AI generations
+ Job status
+ Processing history
+ User settings
+ Cache records
+Use migrations through Drizzle.
+Use typed schemas for all tables.
+
+Hosting -
+Railway
+Services:
+ React Router application
+ PostgreSQL database
+ Redis instance
+Use environment variables for all secrets.
+ 
+Language -
+TypeScript (Strict Mode)
+No JavaScript files unless unavoidable.
+Avoid using any.
+Use proper interfaces and types.
+Prefer type inference where appropriate.

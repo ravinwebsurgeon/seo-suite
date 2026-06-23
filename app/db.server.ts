@@ -1,16 +1,22 @@
-import { PrismaClient } from "@prisma/client";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
+import * as schema from "./db/schema";
 
 declare global {
   // eslint-disable-next-line no-var
-  var prismaGlobal: PrismaClient;
+  var __dbPool: Pool | undefined;
 }
 
-if (process.env.NODE_ENV !== "production") {
-  if (!global.prismaGlobal) {
-    global.prismaGlobal = new PrismaClient();
+function getPool(): Pool {
+  if (!globalThis.__dbPool) {
+    globalThis.__dbPool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+    });
   }
+  return globalThis.__dbPool;
 }
 
-const prisma = global.prismaGlobal ?? new PrismaClient();
+const db = drizzle(getPool(), { schema });
 
-export default prisma;
+export default db;
+export type DrizzleDB = typeof db;
