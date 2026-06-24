@@ -44,7 +44,7 @@ const CREATE_REDIRECT_MUTATION = `#graphql
     urlRedirectCreate(urlRedirect: $urlRedirect) {
       urlRedirect {
         id
-        fromPath
+        path
         target
       }
       userErrors {
@@ -123,22 +123,35 @@ export async function createUrlRedirect(
   fromPath: string,
   target: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const response = await admin.graphql(CREATE_REDIRECT_MUTATION, {
-    variables: { urlRedirect: { fromPath, target } },
-  });
-  const json = (await response.json()) as {
-    data: {
-      urlRedirectCreate: {
-        urlRedirect: { id: string; fromPath: string; target: string } | null;
-        userErrors: Array<{ field: string[]; message: string }>;
+  try {
+    const response = await admin.graphql(CREATE_REDIRECT_MUTATION, {
+      variables: { urlRedirect: { path: fromPath, target } },
+    });
+    const json = (await response.json()) as {
+      data: {
+        urlRedirectCreate: {
+          urlRedirect: { id: string; path: string; target: string } | null;
+          userErrors: Array<{ field: string[]; message: string }>;
+        };
       };
     };
-  };
-  const result = json.data.urlRedirectCreate;
-  if (result.userErrors.length > 0) {
-    return { success: false, error: result.userErrors.map((e) => e.message).join(", ") };
+    const result = json.data.urlRedirectCreate;
+    if (result.userErrors.length > 0) {
+      return { success: false, error: result.userErrors.map((e) => e.message).join(", ") };
+    }
+    return { success: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to create URL redirect";
+    // Surface access-scope errors with a clear merchant-facing message
+    if (message.includes("write_online_store_navigation")) {
+      return {
+        success: false,
+        error:
+          "This app does not have permission to create URL redirects. Re-install the app to grant the required access scope.",
+      };
+    }
+    return { success: false, error: message };
   }
-  return { success: true };
 }
 
 export async function addProductToCollection(

@@ -1,141 +1,395 @@
-You are a senior Shopify app developer.
+# SEO Suite – Schema Markup Builder
 
-Build the first module of a Shopify embedded app called SEO Suite using:
+## Overview
 
-- React Router 7
-- TypeScript
-- Shopify Polaris
-- Shopify Admin GraphQL API
-- Shopify App Bridge
-- Strict TypeScript
+Implement the **Schema Markup Builder** module for the Shopify embedded app **SEO Suite**.
 
-Module Name:
-Dead Collection Cleaner
+This module should allow Shopify merchants to generate valid JSON-LD structured data through a user-friendly form interface without requiring technical knowledge of schema markup.
+
+The module is part of a Shopify embedded app built with:
+
+* React Router 7
+* Shopify Polaris
+* Shopify Admin GraphQL API
+* TypeScript (strict mode)
+* PostgreSQL + Drizzle ORM
+
+No AI integration is required for this module.
+
+---
+
+## Objective
+
+Create a form-driven schema generator that:
+
+1. Supports multiple schema types.
+2. Auto-populates available Shopify data.
+3. Generates valid JSON-LD in real time.
+4. Provides copy/export functionality.
+5. Generates Shopify Liquid snippets for dynamic theme integration.
+6. Includes validation and preview capabilities.
+
+---
+
+## Supported Schema Types
+
+Implement support for the following schema types:
+
+### 1. Product Schema
+
+Auto-fill from Shopify product data:
+
+* Product Name
+* Product URL
+* Product Price
+* Currency
+* Product Image
+
+Merchant-editable fields:
+
+* Brand
+* SKU
+* Availability
+* Description
+
+Generate valid JSON-LD Product schema.
+
+---
+
+### 2. Article Schema
+
+Auto-fill where available:
+
+* Article URL
+* Headline
+* Published Date
+
+Merchant-editable fields:
+
+* Author
+* Image URL
+* Description
+
+Generate valid JSON-LD Article schema.
+
+---
+
+### 3. BreadcrumbList Schema
+
+Auto-fill:
+
+* Store URL
+
+Merchant-entered:
+
+* Dynamic breadcrumb items
+
+  * Label
+  * URL
+
+Features:
+
+* Add breadcrumb item
+* Remove breadcrumb item
+* Reorder breadcrumb items
+
+Generate valid JSON-LD BreadcrumbList schema.
+
+---
+
+### 4. FAQ Schema
+
+Merchant-entered:
+
+* Question
+* Answer
+
+Features:
+
+* Add FAQ pair
+* Remove FAQ pair
+* Multiple entries supported
+
+Generate valid JSON-LD FAQPage schema.
+
+---
+
+# User Interface Requirements
+
+## Page Layout
+
+Use Polaris components and maintain consistency with existing SEO Suite modules.
+
+Layout should contain:
+
+### Left Side
+
+Configuration panel:
+
+* Schema Type Selector
+* Dynamic Form Fields
+* Validation Messages
+
+### Right Side
+
+Live Preview Panel:
+
+* Formatted JSON-LD
+* Syntax-highlighted code block
+* Auto-updates as fields change
+
+---
+
+## Schema Type Selector
+
+Implement either:
+
+* Polaris Tabs
+
+or
+
+* Card-based selector
+
+Supported options:
+
+* Product
+* Article
+* BreadcrumbList
+* FAQ
+
+Switching schema types should dynamically load the appropriate form.
+
+---
+
+## Dynamic Forms
+
+Each schema type should render only relevant fields.
 
 Requirements:
 
-1. Dashboard page with stat cards:
-   - Total Collections
-   - Empty Collections
-   - Broken Automated Collections
-   - Orphan Products
+* Proper labels
+* Help text where necessary
+* Required field indicators
+* Inline validation
 
-2. Fetch collections using Shopify Admin GraphQL.
+---
 
-3. Detect:
-   - Empty collections (productsCount = 0)
-   - Broken automated collections (ruleSet exists but productsCount = 0)
-   - Orphan products (products with no collections)
+## Live JSON-LD Preview
 
-4. Create a sortable Polaris DataTable containing:
-   - Collection name
-   - Collection type
-   - Product count
-   - Last updated date
+As merchants edit fields:
 
-5. Add row selection and bulk actions:
-   - Delete selected collections
-   - Export CSV report
+* Regenerate JSON-LD instantly
+* Pretty-print output
+* Keep preview synchronized with form state
 
-6. Create an orphan products table:
-   - Product name
-   - Current status
-   - Assign collection dropdown
-   - Save button
+Display:
 
-7. Add delete collection mutation support.
+```json
+{
+  "@context": "https://schema.org",
+  "@type": "Product"
+}
+```
 
-8. Add URL redirect creation modal before deletion.
+with proper indentation.
 
-9. Follow Shopify Polaris design patterns.
+---
 
-10. Separate code into:
-   - routes
-   - components
-   - services/shopify
-   - types
+## Output Features
 
-11. Return complete production-ready code with TypeScript types and GraphQL queries.
+### Copy JSON-LD
 
-Generate all files with folder structure.
+Button:
 
+"Copy JSON-LD"
 
+Copies:
 
+```html
+<script type="application/ld+json">
+...
+</script>
+```
 
-and also make sure to use below given stack where need -
+to clipboard.
 
-Core Stack-
+Show success toast after copying.
 
-Framework-
-React Router 7 (Shopify App Template)
-Use file-based routing.
-Use loaders and actions for server-side operations.
-Follow Shopify embedded app architecture.
-Keep routes modular and feature-based.
+---
 
-UI Layer -
-Shopify Polaris only.
-Use Polaris components before creating custom UI.
-Follow Shopify design guidelines.
-Ensure responsive layouts for desktop and tablet merchants.
+### Download JSON-LD
 
-Authentication - 
-Shopify OAuth provided by Shopify App Template.
-Use existing session management from the template.
-Do not create custom authentication unless explicitly required.
+Button:
 
-Shopify Integration -
-Use Shopify Admin GraphQL API (2025-01).
-Prefer GraphQL over REST.
-Use typed queries and mutations.
-All Shopify data reads and writes must go through the Admin API.
+"Download"
 
-AI Layer - 
-Claude API (claude-sonnet-4-6).
-AI is responsible for:
- SEO meta title generation
- Meta description generation
- Product description optimization
- Alt text generation
- Structured data suggestions
- SEO recommendations
-Use structured prompts.
-Validate and sanitize AI output before storing.
+Downloads:
 
-Queue System - 
-BullMQ
-Redis
-Use queues for:
- Bulk SEO generation
- Bulk alt text generation
- Long-running AI operations
- Background processing
-Never execute large bulk jobs synchronously.
+schema.json
 
-Database - 
-PostgreSQL
-Drizzle ORM
-Store:
- Keywords
- AI generations
- Job status
- Processing history
- User settings
- Cache records
-Use migrations through Drizzle.
-Use typed schemas for all tables.
+containing generated JSON-LD.
 
-Hosting -
-Railway
-Services:
- React Router application
- PostgreSQL database
- Redis instance
-Use environment variables for all secrets.
- 
-Language -
-TypeScript (Strict Mode)
-No JavaScript files unless unavoidable.
-Avoid using any.
-Use proper interfaces and types.
-Prefer type inference where appropriate.
+---
+
+### Generate Shopify Liquid Snippet
+
+For Product Schema provide a second output option:
+
+Generate Liquid code using Shopify variables.
+
+Example:
+
+```liquid
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Product",
+  "name": "{{ product.title }}",
+  "image": "{{ product.featured_image | image_url }}",
+  "offers": {
+    "@type": "Offer",
+    "price": "{{ product.price | money_without_currency }}"
+  }
+}
+</script>
+```
+
+Requirements:
+
+* Use Shopify Liquid variables where appropriate.
+* Generate production-ready snippets.
+* Copy-to-clipboard support.
+
+---
+
+### Rich Results Validation
+
+Provide a button:
+
+"Validate in Google Rich Results Test"
+
+Behavior:
+
+* Opens Google Rich Results Test in a new tab.
+* Merchant can validate their page URL.
+
+Use:
+
+https://search.google.com/test/rich-results
+
+---
+
+# Shopify Integration
+
+Use Shopify Admin GraphQL where applicable.
+
+Fetch data required for auto-fill:
+
+Product:
+
+* title
+* handle
+* onlineStoreUrl
+* featuredImage
+* price
+* currency
+
+Article:
+
+* title
+* handle
+* publishedAt
+
+Create reusable GraphQL utilities inside:
+
+```text
+app/services/shopify/
+```
+
+Keep GraphQL logic separate from UI components.
+
+---
+
+# Code Structure
+
+Suggested structure:
+
+```text
+app/routes/app.schema-builder.tsx
+
+app/components/schema-builder/
+  SchemaTypeSelector.tsx
+  ProductSchemaForm.tsx
+  ArticleSchemaForm.tsx
+  BreadcrumbSchemaForm.tsx
+  FAQSchemaForm.tsx
+  JsonPreview.tsx
+  LiquidPreview.tsx
+
+app/services/schema/
+  schema-generator.ts
+  liquid-generator.ts
+  validators.ts
+
+app/services/shopify/
+  schema-data.server.ts
+```
+
+---
+
+# Validation Requirements
+
+Product:
+
+* Name required
+* Price required
+* URL required
+
+Article:
+
+* Headline required
+* Published Date required
+
+Breadcrumb:
+
+* Minimum 1 breadcrumb item
+
+FAQ:
+
+* At least 1 Question/Answer pair
+* No empty questions
+* No empty answers
+
+Prevent generation if validation fails.
+
+Display user-friendly Polaris error messages.
+
+---
+
+# Technical Requirements
+
+* TypeScript strict mode
+* Reusable schema generation utilities
+* Reusable validation layer
+* Clean component architecture
+* Polaris-first UI
+* Responsive design
+* No AI integration
+* No database storage required for v1
+
+---
+
+# Deliverables
+
+Build a fully functional Schema Markup Builder module that includes:
+
+1. Schema type selection.
+2. Dynamic forms.
+3. Live JSON-LD preview.
+4. Product, Article, BreadcrumbList, and FAQ schema generation.
+5. Copy-to-clipboard functionality.
+6. Download functionality.
+7. Liquid snippet generation.
+8. Google Rich Results validation link.
+9. Form validation and error handling.
+10. Clean, maintainable TypeScript code following existing SEO Suite architecture.

@@ -1,4 +1,4 @@
-import { useState, useRef, useImperativeHandle, forwardRef } from "react";
+import { useState, useRef, useImperativeHandle, forwardRef, useEffect, useCallback } from "react";
 import type { elements } from "@shopify/polaris-types";
 
 type ModalInstance = InstanceType<typeof elements.Modal>;
@@ -22,6 +22,9 @@ export interface RedirectModalHandle {
   openSingle: (collectionHandle: string, collectionId: string) => void;
   openBulk: (ids: string[]) => void;
 }
+
+// Stable ID so commandFor on the cancel button can target the modal natively.
+const MODAL_ID = "delete-collection-modal";
 
 export const RedirectModal = forwardRef<RedirectModalHandle, RedirectModalProps>(
   function RedirectModal({ onConfirmDelete, onBulkDelete, isDeleting }, ref) {
@@ -53,11 +56,35 @@ export const RedirectModal = forwardRef<RedirectModalHandle, RedirectModalProps>
       },
     }));
 
-    const handleClose = () => {
+    const handleClose = useCallback(() => {
       modalRef.current?.hideOverlay();
-    };
+    }, []);
 
-    const handleConfirm = () => {
+    // Safety net for the X button.
+    // `click` is a composed event and bubbles out of shadow DOM. We listen at the s-modal
+    // element and use composedPath() to find the innermost ShadowRoot the click passed through.
+    // If that ShadowRoot's host IS the s-modal element, the click came from the modal's own
+    // shadow DOM (X button or backdrop) and we call hideOverlay() as a fallback.
+    // Crucially, clicks inside nested web-component shadow DOMs (e.g. s-checkbox, s-text-field)
+    // have a different host, so they are correctly ignored and do NOT close the modal.
+    useEffect(() => {
+      const modal = modalRef.current as unknown as HTMLElement | null;
+      if (!modal) return;
+
+      const onModalClick = (event: MouseEvent) => {
+        const nearestShadowRoot = event
+          .composedPath()
+          .find((node): node is ShadowRoot => node instanceof ShadowRoot);
+        if (nearestShadowRoot && nearestShadowRoot.host === modal) {
+          modalRef.current?.hideOverlay();
+        }
+      };
+
+      modal.addEventListener("click", onModalClick);
+      return () => modal.removeEventListener("click", onModalClick);
+    }, []);
+
+    const handleConfirm = useCallback(() => {
       if (state.mode === "single") {
         onConfirmDelete(
           state.collectionId,
@@ -68,7 +95,7 @@ export const RedirectModal = forwardRef<RedirectModalHandle, RedirectModalProps>
         onBulkDelete(state.bulkIds);
       }
       handleClose();
-    };
+    }, [state, createRedirect, fromPath, toPath, onConfirmDelete, onBulkDelete, handleClose]);
 
     const handleRedirectToggle = (e: Event) => {
       setCreateRedirect((e.target as HTMLInputElement).checked);
@@ -79,10 +106,10 @@ export const RedirectModal = forwardRef<RedirectModalHandle, RedirectModalProps>
 
     return (
       <s-modal
+        id={MODAL_ID}
         ref={modalRef}
         heading={`Delete ${isBulk ? `${count} Collections` : "Collection"}`}
         size="base"
-        onHide={handleClose}
       >
         <s-stack direction="block" gap="base">
           <s-banner tone="critical" heading="This action cannot be undone">
@@ -129,11 +156,26 @@ export const RedirectModal = forwardRef<RedirectModalHandle, RedirectModalProps>
           variant="primary"
           tone="critical"
           onClick={handleConfirm}
+          disabled={isDeleting || undefined}
           {...(isDeleting ? { loading: true } : {})}
         >
-          {isDeleting ? "Deleting..." : `Delete ${isBulk ? "all" : "collection"}`}
+          {`Delete ${isBulk ? "all" : "collection"}`}
         </s-button>
-        <s-button slot="secondary-actions" variant="secondary" onClick={handleClose}>
+
+        {/*
+          Cancel uses commandFor/command instead of onClick.
+          React synthetic events on s-button elements inside s-modal shadow-DOM slots are
+          unreliable because React's delegated listener sits at the app root, and Shopify's
+          surface-component slots can retarget the event before it reaches React.
+          commandFor/command routes through the web component's own Invoker Commands system
+          and is guaranteed to call hideOverlay() on the target element.
+        */}
+        <s-button
+          slot="secondary-actions"
+          variant="secondary"
+          commandFor={MODAL_ID}
+          command="--hide"
+        >
           Cancel
         </s-button>
       </s-modal>

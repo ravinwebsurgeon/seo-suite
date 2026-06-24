@@ -1,6 +1,6 @@
 export type CollectionType = "manual" | "automated";
 
-export type ProductStatus = "ACTIVE" | "DRAFT" | "ARCHIVED";
+export type ProductStatus = "ACTIVE" | "DRAFT" | "ARCHIVED" | "UNLISTED";
 
 export interface CollectionRule {
   column: string;

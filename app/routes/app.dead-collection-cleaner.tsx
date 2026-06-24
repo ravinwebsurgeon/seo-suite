@@ -75,8 +75,19 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<ActionRes
   }
 
   if (intent === "assignCollection") {
-    const productId = formData.get("productId") as string;
-    const collectionId = formData.get("collectionId") as string;
+    const productId = (formData.get("productId") as string | null)?.trim() ?? "";
+    const collectionId = (formData.get("collectionId") as string | null)?.trim() ?? "";
+
+    // Server-side guard: reject empty or obviously invalid IDs before hitting the API.
+    // This prevents the "Variable $id of type ID! was provided invalid value" GraphQL error
+    // that occurs when the frontend submits a form with no collection selected.
+    if (!productId || !collectionId) {
+      return { success: false, intent, error: "Please select a valid collection before saving." };
+    }
+    if (!collectionId.startsWith("gid://shopify/Collection/")) {
+      return { success: false, intent, error: "Invalid collection selected. Please choose a collection from the list." };
+    }
+
     const result = await addProductToCollection(admin, collectionId, productId);
     if (!result.success) {
       return { success: false, intent, error: result.error };
