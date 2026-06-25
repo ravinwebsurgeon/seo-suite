@@ -16,6 +16,9 @@ const PRODUCTS_QUERY = `#graphql
         title
         handle
         onlineStoreUrl
+        totalInventory
+        vendor
+        description
         featuredImage {
           url
         }
@@ -23,6 +26,11 @@ const PRODUCTS_QUERY = `#graphql
           minVariantPrice {
             amount
             currencyCode
+          }
+        }
+        variants(first: 1) {
+          nodes {
+            sku
           }
         }
       }

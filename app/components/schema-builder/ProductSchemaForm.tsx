@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import type { elements } from "@shopify/polaris-types";
 import type { ProductSchemaData, ValidationError, ShopifyProduct } from "../../types/schema-builder";
 import { getFieldError } from "../../services/schema/validators";
@@ -21,6 +21,10 @@ const AVAILABILITY_OPTIONS = [
 export function ProductSchemaForm({ data, onChange, errors, products, shopDomain }: ProductSchemaFormProps) {
   const availabilityRef = useRef<InstanceType<typeof elements.Select>>(null);
   const autoFillRef = useRef<InstanceType<typeof elements.Select>>(null);
+  // Tracks the last auto-filled product so `key` forces s-select / s-text-field
+  // to remount and pick up the new `value` prop (web components only read the
+  // `value` attribute on first connection; a key change triggers a fresh mount).
+  const [selectedProductId, setSelectedProductId] = useState("");
 
   useEffect(() => {
     const el = availabilityRef.current;
@@ -41,13 +45,23 @@ export function ProductSchemaForm({ data, onChange, errors, products, shopDomain
       if (!val) return;
       const product = products.find((p) => p.id === val);
       if (!product) return;
+      // Shopify Admin GraphQL returns the amount in the currency's smallest unit
+      // (e.g. 29999 for ₹299.99 or $299.99). Divide by 100 to get the decimal value.
+      const rawAmount = parseFloat(product.priceRange.minVariantPrice.amount);
+      const price = isNaN(rawAmount) ? "" : (rawAmount / 100).toFixed(2);
+      setSelectedProductId(val);
       onChange({
         ...data,
         name: product.title,
         url: product.onlineStoreUrl ?? `${shopDomain}/products/${product.handle}`,
-        price: product.priceRange.minVariantPrice.amount,
+        price,
         currency: product.priceRange.minVariantPrice.currencyCode,
         image: product.featuredImage?.url ?? "",
+        brand: product.vendor,
+        sku: product.variants.nodes[0]?.sku ?? "",
+        description: product.description,
+        // null totalInventory means inventory isn't tracked → treat as in stock
+        availability: (product.totalInventory === null || product.totalInventory > 0) ? "InStock" : "OutOfStock",
       });
     };
     el.addEventListener("change", handler);
@@ -106,7 +120,9 @@ export function ProductSchemaForm({ data, onChange, errors, products, shopDomain
           />
         </s-grid-item>
         <s-grid-item>
+          {/* key forces remount on product change so the web component reads the new value */}
           <s-text-field
+            key={`currency-${selectedProductId}`}
             label="Currency Code"
             value={data.currency}
             details="ISO 4217 code (e.g. USD, GBP)"
@@ -115,7 +131,8 @@ export function ProductSchemaForm({ data, onChange, errors, products, shopDomain
         </s-grid-item>
       </s-grid>
 
-      <s-select ref={availabilityRef} label="Availability" value={data.availability}>
+      {/* key forces remount on product change so the web component reads the new value */}
+      <s-select key={`availability-${selectedProductId}`} ref={availabilityRef} label="Availability" value={data.availability}>
         {AVAILABILITY_OPTIONS.map((opt) => (
           <s-option key={opt.value} value={opt.value}>
             {opt.label}

@@ -57,12 +57,18 @@ export interface ShopifyProduct {
   title: string;
   handle: string;
   onlineStoreUrl: string | null;
+  totalInventory: number | null;
+  vendor: string;
+  description: string;
   featuredImage: { url: string } | null;
   priceRange: {
     minVariantPrice: {
       amount: string;
       currencyCode: string;
     };
+  };
+  variants: {
+    nodes: Array<{ sku: string }>;
   };
 }
 
