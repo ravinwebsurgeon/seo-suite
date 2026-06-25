@@ -1,395 +1,461 @@
-# SEO Suite – Schema Markup Builder
+# Product Sales Intelligence Module
 
-## Overview
+## Feature Overview
 
-Implement the **Schema Markup Builder** module for the Shopify embedded app **SEO Suite**.
+Build a production-ready Shopify Embedded App module called **Product Sales Intelligence** as part of the SEO Suite application.
 
-This module should allow Shopify merchants to generate valid JSON-LD structured data through a user-friendly form interface without requiring technical knowledge of schema markup.
+The goal of this module is to provide merchants with actionable sales insights directly inside Shopify Admin.
 
-The module is part of a Shopify embedded app built with:
+The module should analyze order history, sales performance, and inventory levels to help merchants:
+
+* Identify best-selling products.
+* Identify products receiving no sales.
+* Identify products at risk of going out of stock.
+* Make better inventory purchasing decisions.
+* Optimize marketing spend.
+* Reduce dead inventory.
+* Prevent stockouts.
+
+This module is analytics-focused and does not use AI.
+
+---
+
+## Tech Stack
 
 * React Router 7
+* TypeScript
 * Shopify Polaris
 * Shopify Admin GraphQL API
-* TypeScript (strict mode)
-* PostgreSQL + Drizzle ORM
+* PostgreSQL
+* Drizzle ORM
 
-No AI integration is required for this module.
+No Claude AI required.
 
----
-
-## Objective
-
-Create a form-driven schema generator that:
-
-1. Supports multiple schema types.
-2. Auto-populates available Shopify data.
-3. Generates valid JSON-LD in real time.
-4. Provides copy/export functionality.
-5. Generates Shopify Liquid snippets for dynamic theme integration.
-6. Includes validation and preview capabilities.
+No BullMQ required for V1.
 
 ---
 
-## Supported Schema Types
+## Data Sources
 
-Implement support for the following schema types:
+### Orders
 
-### 1. Product Schema
+Fetch:
 
-Auto-fill from Shopify product data:
+* Order ID
+* Created At
+* Line Items
+* Product ID
+* Variant ID
+* Quantity
+* Total Sales
 
-* Product Name
-* Product URL
-* Product Price
-* Currency
-* Product Image
+Used to calculate:
 
-Merchant-editable fields:
+* Units sold
+* Revenue
+* Sales velocity
 
-* Brand
-* SKU
-* Availability
-* Description
+### Products
 
-Generate valid JSON-LD Product schema.
+Fetch:
 
----
+* Product ID
+* Product Title
+* Variant Title
+* Inventory Quantity
+* Created At
+* Status
 
-### 2. Article Schema
+Used for:
 
-Auto-fill where available:
+* Inventory analysis
+* Stock calculations
+* Zero-sale detection
 
-* Article URL
-* Headline
-* Published Date
+### Optional
 
-Merchant-editable fields:
+If available on merchant plan:
 
-* Author
-* Image URL
-* Description
+Use Shopify Analytics API for aggregated sales reporting.
 
-Generate valid JSON-LD Article schema.
-
----
-
-### 3. BreadcrumbList Schema
-
-Auto-fill:
-
-* Store URL
-
-Merchant-entered:
-
-* Dynamic breadcrumb items
-
-  * Label
-  * URL
-
-Features:
-
-* Add breadcrumb item
-* Remove breadcrumb item
-* Reorder breadcrumb items
-
-Generate valid JSON-LD BreadcrumbList schema.
+Fallback to Orders API if Analytics API is unavailable.
 
 ---
 
-### 4. FAQ Schema
+# Global Date Range Filter
 
-Merchant-entered:
+Provide a date range picker at the top of the page.
 
-* Question
-* Answer
+Supported presets:
 
-Features:
+* Last 7 Days
+* Last 30 Days
+* Last 90 Days
+* Custom Range
 
-* Add FAQ pair
-* Remove FAQ pair
-* Multiple entries supported
+Date range applies to all reports.
 
-Generate valid JSON-LD FAQPage schema.
+Reports should refresh on demand.
 
----
-
-# User Interface Requirements
-
-## Page Layout
-
-Use Polaris components and maintain consistency with existing SEO Suite modules.
-
-Layout should contain:
-
-### Left Side
-
-Configuration panel:
-
-* Schema Type Selector
-* Dynamic Form Fields
-* Validation Messages
-
-### Right Side
-
-Live Preview Panel:
-
-* Formatted JSON-LD
-* Syntax-highlighted code block
-* Auto-updates as fields change
+No real-time polling.
 
 ---
 
-## Schema Type Selector
+# Dashboard Overview
 
-Implement either:
+Display summary cards:
 
-* Polaris Tabs
+### Sales Metrics
 
-or
+* Total Revenue
+* Total Orders
+* Total Units Sold
+* Average Order Value
 
-* Card-based selector
+### Product Metrics
 
-Supported options:
-
-* Product
-* Article
-* BreadcrumbList
-* FAQ
-
-Switching schema types should dynamically load the appropriate form.
+* Best Seller Count
+* Zero Sale Count
+* High Demand Count
 
 ---
 
-## Dynamic Forms
+# Core View 1: Best Sellers
 
-Each schema type should render only relevant fields.
+Purpose:
 
-Requirements:
+Show products generating the most sales.
 
-* Proper labels
-* Help text where necessary
-* Required field indicators
-* Inline validation
+Calculation:
 
----
-
-## Live JSON-LD Preview
-
-As merchants edit fields:
-
-* Regenerate JSON-LD instantly
-* Pretty-print output
-* Keep preview synchronized with form state
+Rank products by units sold during selected date range.
 
 Display:
 
-```json
-{
-  "@context": "https://schema.org",
-  "@type": "Product"
-}
-```
+* Product Title
+* Variant
+* Revenue
+* Units Sold
+* Percentage of Total Revenue
+* Inventory Remaining
 
-with proper indentation.
+Sorting:
 
----
+* Revenue
+* Units Sold
+* Inventory
+* Revenue %
 
-## Output Features
+Default Sort:
 
-### Copy JSON-LD
+Highest Units Sold
 
-Button:
+Use Cases:
 
-"Copy JSON-LD"
-
-Copies:
-
-```html
-<script type="application/ld+json">
-...
-</script>
-```
-
-to clipboard.
-
-Show success toast after copying.
+* Reorder inventory
+* Increase advertising budget
+* Feature top products
+* Create bundles
 
 ---
 
-### Download JSON-LD
+# Core View 2: Zero Sale Products
 
-Button:
+Purpose:
 
-"Download"
+Identify products with no sales during selected period.
 
-Downloads:
+Logic:
 
-schema.json
+Products with:
 
-containing generated JSON-LD.
+Units Sold = 0
+
+during selected date range.
+
+Display:
+
+* Product Title
+* Inventory Level
+* Product Created Date
+* Last Sale Date
+* Days Since Last Sale
+
+Actions:
+
+* Mark For Discount
+* Archive Product
+* Add To Clearance Collection
+
+Use Cases:
+
+* Inventory cleanup
+* Clearance campaigns
+* Reduce storage costs
 
 ---
 
-### Generate Shopify Liquid Snippet
+# Core View 3: High Demand / Low Stock
 
-For Product Schema provide a second output option:
+Purpose:
 
-Generate Liquid code using Shopify variables.
+Identify products likely to go out of stock soon.
+
+Calculation:
+
+Sales Velocity Formula:
+
+(units sold in last 14 days) / inventory quantity
+
+Default Threshold:
+
+0.5
+
+If result exceeds threshold:
+
+Product should be flagged.
 
 Example:
 
-```liquid
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "Product",
-  "name": "{{ product.title }}",
-  "image": "{{ product.featured_image | image_url }}",
-  "offers": {
-    "@type": "Offer",
-    "price": "{{ product.price | money_without_currency }}"
-  }
-}
-</script>
-```
+Units Sold Last 14 Days = 50
 
-Requirements:
+Inventory = 20
 
-* Use Shopify Liquid variables where appropriate.
-* Generate production-ready snippets.
-* Copy-to-clipboard support.
+50 / 20 = 2.5
+
+Flag Product.
+
+Display:
+
+* Product Title
+* Inventory Quantity
+* Units Sold Last 14 Days
+* Sales Velocity
+* Estimated Days Remaining
+
+Estimated Days Remaining Formula:
+
+inventory quantity /
+(units sold in last 14 days / 14)
+
+Use Cases:
+
+* Restock planning
+* Prevent stockouts
+* Purchase order forecasting
 
 ---
 
-### Rich Results Validation
+# Additional Insights
 
-Provide a button:
+Add optional dashboard widgets:
 
-"Validate in Google Rich Results Test"
+### Top Revenue Products
 
-Behavior:
+Rank by revenue generated.
 
-* Opens Google Rich Results Test in a new tab.
-* Merchant can validate their page URL.
+### Recently Trending Products
+
+Products with highest sales growth compared to previous period.
+
+Example:
+
+Current 30 Days vs Previous 30 Days.
+
+### Inventory Health
+
+Break products into:
+
+* Healthy Stock
+* Low Stock
+* Critical Stock
+* Out Of Stock
+
+---
+
+# Main Table Requirements
+
+Use Polaris IndexTable.
+
+Support:
+
+* Sorting
+* Filtering
+* Pagination
+* Search
+
+Common Columns:
+
+* Product
+* Variant
+* Revenue
+* Units Sold
+* Inventory
+* Status
+* Last Sale Date
+
+---
+
+# Export Functionality
+
+Provide CSV Export for each report.
+
+Best Sellers Export:
+
+* Product
+* Variant
+* Revenue
+* Units Sold
+* Revenue Percentage
+
+Zero Sale Export:
+
+* Product
+* Inventory
+* Last Sale Date
+* Days Since Last Sale
+
+High Demand Export:
+
+* Product
+* Inventory
+* Units Sold
+* Velocity Score
+* Estimated Days Remaining
+
+---
+
+# Database Cache
+
+Create local cache tables to avoid recalculating reports repeatedly.
+
+### sales_cache
+
+Fields:
+
+* id
+* shop_id
+* product_id
+* variant_id
+* units_sold
+* revenue
+* date_range
+* created_at
+
+### inventory_cache
+
+Fields:
+
+* id
+* shop_id
+* product_id
+* inventory_quantity
+* updated_at
+
+Refresh cache when merchant requests new report data.
+
+---
+
+# Routes
+
+/app/product-sales
+
+/app/product-sales/dashboard
+
+/app/product-sales/best-sellers
+
+/app/product-sales/zero-sales
+
+/app/product-sales/high-demand
+
+---
+
+# Polaris Components
 
 Use:
 
-https://search.google.com/test/rich-results
+* Page
+* Layout
+* Card
+* IndexTable
+* Tabs
+* Filters
+* DatePicker
+* Badge
+* Banner
+* Tooltip
+* Pagination
+* Toast
+
+Follow Shopify Embedded App UX standards.
 
 ---
 
-# Shopify Integration
+# Required Shopify Scopes
 
-Use Shopify Admin GraphQL where applicable.
+read_orders
 
-Fetch data required for auto-fill:
+read_products
 
-Product:
-
-* title
-* handle
-* onlineStoreUrl
-* featuredImage
-* price
-* currency
-
-Article:
-
-* title
-* handle
-* publishedAt
-
-Create reusable GraphQL utilities inside:
-
-```text
-app/services/shopify/
-```
-
-Keep GraphQL logic separate from UI components.
+read_inventory
 
 ---
 
-# Code Structure
+# Performance Requirements
 
-Suggested structure:
+Support stores with:
 
-```text
-app/routes/app.schema-builder.tsx
+* 10,000+ products
+* 100,000+ orders
 
-app/components/schema-builder/
-  SchemaTypeSelector.tsx
-  ProductSchemaForm.tsx
-  ArticleSchemaForm.tsx
-  BreadcrumbSchemaForm.tsx
-  FAQSchemaForm.tsx
-  JsonPreview.tsx
-  LiquidPreview.tsx
+Implement:
 
-app/services/schema/
-  schema-generator.ts
-  liquid-generator.ts
-  validators.ts
+* Cursor pagination
+* Server-side aggregation
+* Efficient order processing
+* PostgreSQL caching
+* Lazy loading
 
-app/services/shopify/
-  schema-data.server.ts
-```
+Avoid loading all orders into memory.
 
 ---
 
-# Validation Requirements
+# Error Handling
 
-Product:
+Handle:
 
-* Name required
-* Price required
-* URL required
+### Shopify
 
-Article:
+* Rate limits
+* Missing scopes
+* Invalid responses
 
-* Headline required
-* Published Date required
+### Data Issues
 
-Breadcrumb:
+* Missing inventory
+* Deleted products
+* Archived products
 
-* Minimum 1 breadcrumb item
+### Reporting
 
-FAQ:
-
-* At least 1 Question/Answer pair
-* No empty questions
-* No empty answers
-
-Prevent generation if validation fails.
-
-Display user-friendly Polaris error messages.
-
----
-
-# Technical Requirements
-
-* TypeScript strict mode
-* Reusable schema generation utilities
-* Reusable validation layer
-* Clean component architecture
-* Polaris-first UI
-* Responsive design
-* No AI integration
-* No database storage required for v1
+* Empty datasets
+* Large date ranges
 
 ---
 
 # Deliverables
 
-Build a fully functional Schema Markup Builder module that includes:
+Provide:
 
-1. Schema type selection.
-2. Dynamic forms.
-3. Live JSON-LD preview.
-4. Product, Article, BreadcrumbList, and FAQ schema generation.
-5. Copy-to-clipboard functionality.
-6. Download functionality.
-7. Liquid snippet generation.
-8. Google Rich Results validation link.
-9. Form validation and error handling.
-10. Clean, maintainable TypeScript code following existing SEO Suite architecture.
+1. Complete architecture.
+2. Folder structure.
+3. Drizzle schema definitions.
+4. Shopify GraphQL queries.
+5. Service layer architecture.
+6. Report calculation logic.
+7. Polaris UI implementation.
+8. Dashboard design.
+9. CSV export implementation.
+10. Scalable reporting strategy.
+
+Build this as a SaaS-grade Shopify analytics module that gives merchants actionable product sales insights for inventory management, marketing decisions, and revenue optimization.

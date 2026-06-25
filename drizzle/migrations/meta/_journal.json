@@ -8,6 +8,13 @@
       "when": 1782213550235,
       "tag": "0000_salty_bushwacker",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1750870000000,
+      "tag": "0001_meta_generator_tables",
+      "breakpoints": true
     }
   ]
 }

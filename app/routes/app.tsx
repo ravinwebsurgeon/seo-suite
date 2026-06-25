@@ -21,6 +21,7 @@ export default function App() {
         <s-link href="/app">Home</s-link>
         <s-link href="/app/dead-collection-cleaner">Dead Collection Cleaner</s-link>
         <s-link href="/app/schema-builder">Schema Markup Builder</s-link>
+        <s-link href="/app/meta-generator">Bulk Meta Generator</s-link>
         <s-link href="/app/additional">Additional page</s-link>
       </s-app-nav>
       <Outlet />

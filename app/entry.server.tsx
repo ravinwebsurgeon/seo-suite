@@ -5,6 +5,10 @@ import { createReadableStreamFromReadable } from "@react-router/node";
 import { type EntryContext } from "react-router";
 import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
+import { initWorker } from "./services/meta-generator/worker.server";
+
+// Initialize BullMQ worker once on server start (no-op if Redis not configured)
+initWorker();
 
 export const streamTimeout = 5000;
 

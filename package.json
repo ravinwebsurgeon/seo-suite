@@ -27,6 +27,7 @@
     "node": ">=20.19 <22 || >=22.12"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.106.0",
     "@react-router/dev": "^7.12.0",
     "@react-router/fs-routes": "^7.12.0",
     "@react-router/node": "^7.12.0",
@@ -34,7 +35,10 @@
     "@shopify/app-bridge-react": "^4.2.4",
     "@shopify/shopify-api": "^11.7.0",
     "@shopify/shopify-app-react-router": "^1.1.0",
+    "bullmq": "^5.79.1",
+    "diff": "^9.0.0",
     "drizzle-orm": "^0.43.1",
+    "ioredis": "^5.11.1",
     "isbot": "^5.1.31",
     "pg": "^8.13.3",
     "react": "^18.3.1",
@@ -45,6 +49,7 @@
   "devDependencies": {
     "@shopify/api-codegen-preset": "^1.2.0",
     "@shopify/polaris-types": "^1.0.1",
+    "@types/diff": "^7.0.2",
     "@types/eslint": "^9.6.1",
     "@types/node": "^22.18.8",
     "@types/pg": "^8.11.10",
