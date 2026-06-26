@@ -20,7 +20,11 @@ let _queue: Queue | null = null;
 function getBullMQConnection(): ConnectionOptions | null {
   const url = process.env.REDIS_URL;
   if (!url) return null;
-  return { url } as ConnectionOptions;
+  return {
+    url,
+    maxRetriesPerRequest: null,
+    enableReadyCheck: false,
+  } as ConnectionOptions;
 }
 
 export function getQueue(): Queue | null {

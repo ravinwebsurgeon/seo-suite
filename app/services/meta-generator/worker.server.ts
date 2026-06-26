@@ -15,7 +15,11 @@ let _worker: Worker | null = null;
 function getBullMQConnection(): ConnectionOptions | null {
   const url = process.env.REDIS_URL;
   if (!url) return null;
-  return { url } as ConnectionOptions;
+  return {
+    url,
+    maxRetriesPerRequest: null,
+    enableReadyCheck: false,
+  } as ConnectionOptions;
 }
 
 export function initWorker(): boolean {

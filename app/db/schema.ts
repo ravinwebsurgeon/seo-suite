@@ -1,7 +1,9 @@
 import {
   bigint,
   boolean,
+  index,
   integer,
+  numeric,
   pgTable,
   serial,
   text,
@@ -77,3 +79,44 @@ export type SeoMetaGeneration = typeof seoMetaGenerations.$inferSelect;
 export type NewSeoMetaGeneration = typeof seoMetaGenerations.$inferInsert;
 export type SeoGenerationJob = typeof seoGenerationJobs.$inferSelect;
 export type NewSeoGenerationJob = typeof seoGenerationJobs.$inferInsert;
+
+// ─── Product Sales Intelligence ───────────────────────────────────────────────
+
+export const salesCache = pgTable(
+  "sales_cache",
+  {
+    id: serial("id").primaryKey(),
+    shopId: text("shop_id").notNull(),
+    productId: text("product_id").notNull(),
+    variantId: text("variant_id").notNull(),
+    productTitle: text("product_title").notNull(),
+    variantTitle: text("variant_title").notNull().default(""),
+    unitsSold: integer("units_sold").notNull().default(0),
+    revenue: numeric("revenue", { precision: 14, scale: 2 }).notNull().default("0"),
+    dateRange: text("date_range").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index("sales_cache_shop_date_idx").on(t.shopId, t.dateRange)],
+);
+
+export const inventoryCache = pgTable(
+  "inventory_cache",
+  {
+    id: serial("id").primaryKey(),
+    shopId: text("shop_id").notNull(),
+    productId: text("product_id").notNull(),
+    variantId: text("variant_id").notNull(),
+    productTitle: text("product_title").notNull(),
+    variantTitle: text("variant_title").notNull().default(""),
+    inventoryQuantity: integer("inventory_quantity").notNull().default(0),
+    productCreatedAt: timestamp("product_created_at", { withTimezone: true }),
+    productStatus: text("product_status").notNull().default("ACTIVE"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index("inventory_cache_shop_idx").on(t.shopId)],
+);
+
+export type SalesCache = typeof salesCache.$inferSelect;
+export type NewSalesCache = typeof salesCache.$inferInsert;
+export type InventoryCache = typeof inventoryCache.$inferSelect;
+export type NewInventoryCache = typeof inventoryCache.$inferInsert;
