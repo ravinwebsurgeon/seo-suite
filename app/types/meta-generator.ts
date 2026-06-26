@@ -16,11 +16,13 @@ export type JobStatus =
   | "cancelled";
 export type FilterValue =
   | "all"
+  | "pending"
   | "missing_title"
   | "missing_desc"
   | "missing_both"
   | "generated"
   | "approved"
+  | "rejected"
   | "published"
   | "failed";
 export type ResourceFilter = "all" | "products" | "articles";

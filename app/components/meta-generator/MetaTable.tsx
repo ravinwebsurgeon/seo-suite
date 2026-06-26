@@ -92,10 +92,17 @@ function MetaRow({ record, selected, tone, onSelect, fetcher }: RowProps) {
     fetcher.submit(fd, { method: "POST" });
   }, [record, editKeyword, fetcher]);
 
-  const isGenerating =
+  const isActionInFlight = (intent: string) =>
     fetcher.state !== "idle" &&
     fetcher.formData?.get("resourceId") === record.resourceId &&
-    ["generate", "regenerate"].includes(fetcher.formData?.get("_intent") as string);
+    fetcher.formData?.get("_intent") === intent;
+
+  const isGenerating = isActionInFlight("generate") || isActionInFlight("regenerate");
+  const isApproving = isActionInFlight("approve");
+  const isRejecting = isActionInFlight("reject");
+  const isPublishing = isActionInFlight("publish");
+  const isSavingKeyword = isActionInFlight("save_keyword");
+  const isSavingEdits = isActionInFlight("save_meta");
 
   const canPublish =
     record.status === "approved" &&
@@ -161,7 +168,12 @@ function MetaRow({ record, selected, tone, onSelect, fetcher }: RowProps) {
             }
             placeholder="target keyword"
           />
-          <s-button variant="tertiary" onClick={saveKeyword}>
+          <s-button
+            variant="tertiary"
+            onClick={saveKeyword}
+            {...(isSavingKeyword ? { loading: true } : {})}
+            disabled={(isSavingKeyword || !editKeyword.trim()) || undefined}
+          >
             Save
           </s-button>
         </s-stack>
@@ -235,8 +247,9 @@ function MetaRow({ record, selected, tone, onSelect, fetcher }: RowProps) {
             <s-button
               variant="secondary"
               onClick={saveEdits}
+              {...(isSavingEdits ? { loading: true } : {})}
               disabled={
-                (editTitle.length > 60 || editDesc.length > 160) || undefined
+                (editTitle.length > 60 || editDesc.length > 160 || isSavingEdits) || undefined
               }
             >
               Save edits
@@ -290,13 +303,20 @@ function MetaRow({ record, selected, tone, onSelect, fetcher }: RowProps) {
 
           {record.status === "generated" && (
             <>
-              <s-button variant="primary" onClick={() => submit("approve")}>
+              <s-button
+                variant="primary"
+                onClick={() => submit("approve")}
+                {...(isApproving ? { loading: true } : {})}
+                disabled={isApproving || undefined}
+              >
                 Approve
               </s-button>
               <s-button
                 variant="secondary"
                 tone="critical"
                 onClick={() => submit("reject")}
+                {...(isRejecting ? { loading: true } : {})}
+                disabled={isRejecting || undefined}
               >
                 Reject
               </s-button>
@@ -313,7 +333,8 @@ function MetaRow({ record, selected, tone, onSelect, fetcher }: RowProps) {
                     generatedDescription: editDesc,
                   })
                 }
-                disabled={!canPublish || undefined}
+                {...(isPublishing ? { loading: true } : {})}
+                disabled={(!canPublish || isPublishing) || undefined}
               >
                 Publish
               </s-button>
@@ -321,6 +342,8 @@ function MetaRow({ record, selected, tone, onSelect, fetcher }: RowProps) {
                 variant="secondary"
                 tone="critical"
                 onClick={() => submit("reject")}
+                {...(isRejecting ? { loading: true } : {})}
+                disabled={isRejecting || undefined}
               >
                 Reject
               </s-button>
@@ -346,6 +369,8 @@ interface MetaTableProps {
   pageInfo: PageInfo;
   searchParams: URLSearchParams;
   setSearchParams: (params: URLSearchParams) => void;
+  pageMode: "cursor" | "offset";
+  currentPage: number;
 }
 
 export function MetaTable({
@@ -356,6 +381,8 @@ export function MetaTable({
   pageInfo,
   searchParams,
   setSearchParams,
+  pageMode,
+  currentPage,
 }: MetaTableProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
@@ -431,12 +458,21 @@ export function MetaTable({
 
   const navigate = (direction: "next" | "prev") => {
     const next = new URLSearchParams(searchParams);
-    if (direction === "next" && pageInfo.endCursor) {
-      next.set("after", pageInfo.endCursor);
-      next.delete("before");
-    } else if (direction === "prev" && pageInfo.startCursor) {
-      next.set("before", pageInfo.startCursor);
+    if (pageMode === "offset") {
+      const newPage = direction === "next" ? currentPage + 1 : currentPage - 1;
+      next.set("page", String(newPage));
       next.delete("after");
+      next.delete("before");
+    } else {
+      if (direction === "next" && pageInfo.endCursor) {
+        next.set("after", pageInfo.endCursor);
+        next.delete("before");
+        next.delete("page");
+      } else if (direction === "prev" && pageInfo.startCursor) {
+        next.set("before", pageInfo.startCursor);
+        next.delete("after");
+        next.delete("page");
+      }
     }
     setSearchParams(next);
   };

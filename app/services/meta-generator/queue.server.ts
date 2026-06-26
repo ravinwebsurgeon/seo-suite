@@ -9,6 +9,7 @@ export interface MetaJobData {
   accessToken: string;
   shopDomain: string;
   jobDbId: number;
+  jobId: string;
   jobType: JobType;
   resourceIds: string[];
   resourceType: ResourceType;

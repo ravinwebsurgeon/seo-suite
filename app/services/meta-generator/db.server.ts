@@ -216,6 +216,23 @@ export async function getMetaRecordsByStatus(
     );
 }
 
+export async function getResourceIdsByStatus(
+  shopId: string,
+  status: MetaStatus,
+  resourceType?: "product" | "article",
+): Promise<string[]> {
+  const conditions = [
+    eq(seoMetaGenerations.shopId, shopId),
+    eq(seoMetaGenerations.status, status),
+    ...(resourceType ? [eq(seoMetaGenerations.resourceType, resourceType)] : []),
+  ];
+  const rows = await db
+    .select({ resourceId: seoMetaGenerations.resourceId })
+    .from(seoMetaGenerations)
+    .where(and(...conditions));
+  return rows.map((r) => r.resourceId);
+}
+
 // ─── Jobs ─────────────────────────────────────────────────────────────────────
 
 export async function createJob(params: {

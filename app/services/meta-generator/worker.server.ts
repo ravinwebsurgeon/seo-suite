@@ -40,7 +40,7 @@ export function initWorker(): boolean {
         tone,
       } = data;
 
-      await updateJobProgress(job.id ?? job.name, { status: "processing" });
+      await updateJobProgress(data.jobId, { status: "processing" });
 
       let processed = 0;
       let failed = 0;
@@ -94,7 +94,7 @@ export function initWorker(): boolean {
           });
 
           processed++;
-          await updateJobProgress(job.id ?? job.name, {
+          await updateJobProgress(data.jobId, {
             processedRecords: processed,
             failedRecords: failed,
           });
@@ -104,7 +104,7 @@ export function initWorker(): boolean {
         } catch (err) {
           failed++;
           await updateMetaStatus(shopId, resourceId, "failed", String(err));
-          await updateJobProgress(job.id ?? job.name, {
+          await updateJobProgress(data.jobId, {
             processedRecords: processed,
             failedRecords: failed,
             errorLog: String(err),
@@ -114,7 +114,7 @@ export function initWorker(): boolean {
 
       const finalStatus =
         failed === resourceIds.length ? "failed" : "completed";
-      await updateJobProgress(job.id ?? job.name, {
+      await updateJobProgress(data.jobId, {
         status: finalStatus,
         processedRecords: processed,
         failedRecords: failed,

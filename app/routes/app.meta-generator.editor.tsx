@@ -2,11 +2,13 @@ import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "re
 import { useLoaderData, useFetcher, useSearchParams } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "@shopify/app-bridge-react";
-import { useEffect } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { authenticate } from "../shopify.server";
 import {
   fetchProducts,
   fetchArticles,
+  fetchProductsByIds,
+  fetchArticlesByIds,
   publishProductSeo,
   publishArticleSeo,
 } from "../services/meta-generator/shopify.server";
@@ -17,6 +19,7 @@ import {
   upsertMetaRecord,
   updateMetaStatus,
   bulkUpdateMetaStatus,
+  getResourceIdsByStatus,
 } from "../services/meta-generator/db.server";
 import { generateMeta } from "../services/meta-generator/claude.server";
 import { enqueueMetaJob } from "../services/meta-generator/queue.server";
@@ -32,6 +35,11 @@ import type {
 
 // ─── Loader ──────────────────────────────────────────────────────────────────
 
+const STATUS_FILTER_VALUES = ["generated", "approved", "rejected", "published", "failed"] as const;
+type StatusFilterValue = typeof STATUS_FILTER_VALUES[number];
+const isStatusFilter = (f: string): f is StatusFilterValue =>
+  (STATUS_FILTER_VALUES as readonly string[]).includes(f);
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const shopId = session.shop;
@@ -43,105 +51,157 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const tone = (url.searchParams.get("tone") ?? "professional") as Tone;
   const after = url.searchParams.get("after") ?? null;
   const before = url.searchParams.get("before") ?? null;
+  const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1") || 1);
   const PAGE_SIZE = 25;
 
   let records: MetaRecord[] = [];
   let pageInfo = { hasNextPage: false, hasPreviousPage: false, startCursor: null as string | null, endCursor: null as string | null };
+  let pageMode: "cursor" | "offset" = "cursor";
+  let currentPage = 1;
 
   const isArticles = resourceFilter === "articles";
-  const shopifyQuery = search ? `title:${search}*` : undefined;
+  const resourceType = isArticles ? "article" : "product";
 
   try {
-    if (!isArticles) {
-      const { products, pageInfo: pi } = await fetchProducts(admin, {
-        first: before ? undefined : PAGE_SIZE,
-        last: before ? PAGE_SIZE : undefined,
-        after: after ?? undefined,
-        before: before ?? undefined,
-        query: shopifyQuery ?? undefined,
-      });
-      pageInfo = pi;
+    if (isStatusFilter(filter)) {
+      // DB-first: get all IDs with this status, then paginate and fetch from Shopify
+      pageMode = "offset";
+      currentPage = page;
 
-      const ids = products.map((p) => p.id);
-      const [keywordMap, metaRows] = await Promise.all([
-        getKeywordsForIds(shopId, ids),
-        getMetaRecordsForIds(shopId, ids),
-      ]);
-      const metaMap = new Map(metaRows.map((r) => [r.resourceId, r]));
+      const allIds = await getResourceIdsByStatus(shopId, filter as MetaStatus, resourceType);
+      const totalCount = allIds.length;
+      const offset = (page - 1) * PAGE_SIZE;
+      const pageIds = allIds.slice(offset, offset + PAGE_SIZE);
 
-      records = products.map((p) => {
-        const meta = metaMap.get(p.id);
-        return {
-          resourceId: p.id,
-          resourceType: "product" as const,
-          title: p.title,
-          handle: p.handle,
-          currentSeoTitle: p.seo.title,
-          currentSeoDescription: p.seo.description,
-          keyword: keywordMap.get(p.id) ?? null,
-          generatedTitle: meta?.generatedTitle ?? null,
-          generatedDescription: meta?.generatedDescription ?? null,
-          tone: (meta?.tone ?? tone) as Tone,
-          status: (meta?.status ?? "pending") as MetaStatus,
-          dbId: meta?.id ?? null,
-          updatedAt: p.updatedAt,
-        };
-      });
+      pageInfo = {
+        hasNextPage: offset + PAGE_SIZE < totalCount,
+        hasPreviousPage: page > 1,
+        startCursor: null,
+        endCursor: null,
+      };
+
+      if (pageIds.length > 0) {
+        const [shopifyItems, keywordMap, metaRows] = await Promise.all([
+          isArticles
+            ? fetchArticlesByIds(admin, pageIds)
+            : fetchProductsByIds(admin, pageIds),
+          getKeywordsForIds(shopId, pageIds),
+          getMetaRecordsForIds(shopId, pageIds),
+        ]);
+        const metaMap = new Map(metaRows.map((r) => [r.resourceId, r]));
+
+        records = shopifyItems.map((item) => {
+          const meta = metaMap.get(item.id);
+          return {
+            resourceId: item.id,
+            resourceType: resourceType as MetaRecord["resourceType"],
+            title: item.title,
+            handle: item.handle,
+            currentSeoTitle: item.seo?.title ?? null,
+            currentSeoDescription: item.seo?.description ?? null,
+            keyword: keywordMap.get(item.id) ?? null,
+            generatedTitle: meta?.generatedTitle ?? null,
+            generatedDescription: meta?.generatedDescription ?? null,
+            tone: (meta?.tone ?? tone) as Tone,
+            status: (meta?.status ?? filter) as MetaStatus,
+            dbId: meta?.id ?? null,
+            updatedAt: item.updatedAt,
+          };
+        });
+
+        if (search) {
+          records = records.filter((r) =>
+            r.title.toLowerCase().includes(search.toLowerCase()),
+          );
+        }
+      }
     } else {
-      const { articles, pageInfo: pi } = await fetchArticles(admin, {
-        first: before ? undefined : PAGE_SIZE,
-        last: before ? PAGE_SIZE : undefined,
-        after: after ?? undefined,
-        before: before ?? undefined,
-        query: shopifyQuery ?? undefined,
-      });
-      pageInfo = pi;
+      // Shopify-first: cursor-based pagination from Shopify, then filter by SEO fields
+      pageMode = "cursor";
+      const shopifyQuery = search ? `title:${search}*` : undefined;
 
-      const ids = articles.map((a) => a.id);
-      const [keywordMap, metaRows] = await Promise.all([
-        getKeywordsForIds(shopId, ids),
-        getMetaRecordsForIds(shopId, ids),
-      ]);
-      const metaMap = new Map(metaRows.map((r) => [r.resourceId, r]));
+      if (!isArticles) {
+        const { products, pageInfo: pi } = await fetchProducts(admin, {
+          first: before ? undefined : PAGE_SIZE,
+          last: before ? PAGE_SIZE : undefined,
+          after: after ?? undefined,
+          before: before ?? undefined,
+          query: shopifyQuery ?? undefined,
+        });
+        pageInfo = pi;
 
-      records = articles.map((a) => {
-        const meta = metaMap.get(a.id);
-        return {
-          resourceId: a.id,
-          resourceType: "article" as const,
-          title: a.title,
-          handle: a.handle,
-          currentSeoTitle: a.seo.title,
-          currentSeoDescription: a.seo.description,
-          keyword: keywordMap.get(a.id) ?? null,
-          generatedTitle: meta?.generatedTitle ?? null,
-          generatedDescription: meta?.generatedDescription ?? null,
-          tone: (meta?.tone ?? tone) as Tone,
-          status: (meta?.status ?? "pending") as MetaStatus,
-          dbId: meta?.id ?? null,
-          updatedAt: a.updatedAt,
-        };
-      });
-    }
+        const ids = products.map((p) => p.id);
+        const [keywordMap, metaRows] = await Promise.all([
+          getKeywordsForIds(shopId, ids),
+          getMetaRecordsForIds(shopId, ids),
+        ]);
+        const metaMap = new Map(metaRows.map((r) => [r.resourceId, r]));
 
-    // Client-side filter by status/SEO
-    if (filter !== "all") {
-      records = records.filter((r) => {
-        if (filter === "missing_title") return !r.currentSeoTitle;
-        if (filter === "missing_desc") return !r.currentSeoDescription;
-        if (filter === "missing_both") return !r.currentSeoTitle && !r.currentSeoDescription;
-        if (filter === "generated") return r.status === "generated";
-        if (filter === "approved") return r.status === "approved";
-        if (filter === "published") return r.status === "published";
-        if (filter === "failed") return r.status === "failed";
-        return true;
-      });
+        records = products.map((p) => {
+          const meta = metaMap.get(p.id);
+          return {
+            resourceId: p.id,
+            resourceType: "product" as const,
+            title: p.title,
+            handle: p.handle,
+            currentSeoTitle: p.seo?.title ?? null,
+            currentSeoDescription: p.seo?.description ?? null,
+            keyword: keywordMap.get(p.id) ?? null,
+            generatedTitle: meta?.generatedTitle ?? null,
+            generatedDescription: meta?.generatedDescription ?? null,
+            tone: (meta?.tone ?? tone) as Tone,
+            status: (meta?.status ?? "pending") as MetaStatus,
+            dbId: meta?.id ?? null,
+            updatedAt: p.updatedAt,
+          };
+        });
+      } else {
+        const { articles, pageInfo: pi } = await fetchArticles(admin, {
+          first: before ? undefined : PAGE_SIZE,
+          last: before ? PAGE_SIZE : undefined,
+          after: after ?? undefined,
+          before: before ?? undefined,
+          query: shopifyQuery ?? undefined,
+        });
+        pageInfo = pi;
+
+        const ids = articles.map((a) => a.id);
+        const [keywordMap, metaRows] = await Promise.all([
+          getKeywordsForIds(shopId, ids),
+          getMetaRecordsForIds(shopId, ids),
+        ]);
+        const metaMap = new Map(metaRows.map((r) => [r.resourceId, r]));
+
+        records = articles.map((a) => {
+          const meta = metaMap.get(a.id);
+          return {
+            resourceId: a.id,
+            resourceType: "article" as const,
+            title: a.title,
+            handle: a.handle,
+            currentSeoTitle: a.seo?.title ?? null,
+            currentSeoDescription: a.seo?.description ?? null,
+            keyword: keywordMap.get(a.id) ?? null,
+            generatedTitle: meta?.generatedTitle ?? null,
+            generatedDescription: meta?.generatedDescription ?? null,
+            tone: (meta?.tone ?? tone) as Tone,
+            status: (meta?.status ?? "pending") as MetaStatus,
+            dbId: meta?.id ?? null,
+            updatedAt: a.updatedAt,
+          };
+        });
+      }
+
+      if (filter === "pending") records = records.filter((r) => r.status === "pending");
+      else if (filter === "missing_title") records = records.filter((r) => !r.currentSeoTitle);
+      else if (filter === "missing_desc") records = records.filter((r) => !r.currentSeoDescription);
+      else if (filter === "missing_both") records = records.filter((r) => !r.currentSeoTitle && !r.currentSeoDescription);
     }
   } catch (err) {
-    console.error("[editor loader]", err);
+    console.error("[editor loader] filter=%s resource=%s error:", filter, resourceFilter, err);
   }
 
-  return { records, pageInfo, filter, resourceFilter, search, tone };
+  return { records, pageInfo, filter, resourceFilter, search, tone, pageMode, currentPage };
 };
 
 // ─── Action ──────────────────────────────────────────────────────────────────
@@ -278,6 +338,7 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<ActionRes
         accessToken: session.accessToken ?? "",
         shopDomain: session.shop,
         jobDbId: dbJobId,
+        jobId,
         jobType: "meta-generation",
         resourceIds: ids,
         resourceType,
@@ -329,6 +390,7 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<ActionRes
         accessToken: session.accessToken ?? "",
         shopDomain: session.shop,
         jobDbId: dbJobId,
+        jobId,
         jobType: "meta-publish",
         resourceIds: ids,
         resourceType,
@@ -345,11 +407,19 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<ActionRes
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function MetaEditor() {
-  const { records, pageInfo, filter, resourceFilter, search, tone } =
+  const { records, pageInfo, filter, resourceFilter, search, tone, pageMode, currentPage } =
     useLoaderData<typeof loader>();
   const [searchParams, setSearchParams] = useSearchParams();
   const fetcher = useFetcher<ActionResult>();
   const shopify = useAppBridge();
+
+  const [searchValue, setSearchValue] = useState(search);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Sync local search input when loader data changes (back/forward navigation)
+  useEffect(() => {
+    setSearchValue(search);
+  }, [search]);
 
   useEffect(() => {
     if (fetcher.state !== "idle" || !fetcher.data) return;
@@ -379,76 +449,165 @@ export default function MetaEditor() {
     next.set(key, value);
     next.delete("after");
     next.delete("before");
+    next.delete("page");
     setSearchParams(next);
+  };
+
+  const handleSearchChange = (value: string) => {
+    setSearchValue(value);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => updateParam("search", value), 400);
   };
 
   return (
     <>
       {/* ── Filters ── */}
       <s-section>
-        <s-stack direction="block" gap="small-200">
-          <s-stack direction="inline" gap="small-200">
-            {/* Resource type toggle */}
-            <s-button
-              variant={resourceFilter === "products" ? "primary" : "secondary"}
-              onClick={() => updateParam("resource", "products")}
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          padding: "10px 14px",
+          background: "var(--p-color-bg-surface)",
+          border: "1px solid var(--p-color-border)",
+          borderRadius: "12px",
+          boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
+          flexWrap: "wrap",
+          rowGap: "8px",
+        }}>
+
+          {/* Segmented toggle: Products / Articles */}
+          <div style={{
+            display: "inline-flex",
+            background: "var(--p-color-bg-surface-secondary)",
+            borderRadius: "8px",
+            padding: "2px",
+            flexShrink: 0,
+          }}>
+            {(["products", "articles"] as const).map((r) => (
+              <button
+                key={r}
+                onClick={() => updateParam("resource", r)}
+                style={{
+                  padding: "5px 14px",
+                  borderRadius: "6px",
+                  border: "none",
+                  cursor: "pointer",
+                  fontSize: "13px",
+                  fontWeight: resourceFilter === r ? "600" : "500",
+                  lineHeight: "20px",
+                  background: resourceFilter === r ? "var(--p-color-bg-surface)" : "transparent",
+                  color: resourceFilter === r ? "var(--p-color-text)" : "var(--p-color-text-subdued)",
+                  boxShadow: resourceFilter === r ? "0 1px 3px rgba(0,0,0,0.12)" : "none",
+                  transition: "all 0.12s ease",
+                }}
+              >
+                {r === "products" ? "Products" : "Articles"}
+              </button>
+            ))}
+          </div>
+
+          {/* Divider */}
+          <div style={{ width: "1px", height: "22px", background: "var(--p-color-border)", flexShrink: 0, margin: "0 2px" }} />
+
+          {/* Status filter */}
+          <div style={{ position: "relative", flexShrink: 0 }}>
+            <select
+              value={filter}
+              onChange={(e) => updateParam("filter", e.target.value)}
+              style={{
+                padding: "5px 28px 5px 10px",
+                border: `1px solid ${filter !== "all" ? "var(--p-color-border-emphasis)" : "var(--p-color-border)"}`,
+                borderRadius: "8px",
+                background: filter !== "all" ? "var(--p-color-bg-fill-info-secondary)" : "var(--p-color-bg-surface)",
+                color: "var(--p-color-text)",
+                fontSize: "13px",
+                fontWeight: "500",
+                cursor: "pointer",
+                outline: "none",
+                lineHeight: "20px",
+                minWidth: "135px",
+                WebkitAppearance: "none",
+                appearance: "none",
+              } as React.CSSProperties}
             >
-              Products
-            </s-button>
-            <s-button
-              variant={resourceFilter === "articles" ? "primary" : "secondary"}
-              onClick={() => updateParam("resource", "articles")}
-            >
-              Articles
-            </s-button>
+              <option value="all">All Statuses</option>
+              <option value="pending">Pending</option>
+              <option value="generated">Generated</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+              <option value="published">Published</option>
+              <option value="failed">Failed</option>
+              <option value="missing_title">Missing Title</option>
+              <option value="missing_desc">Missing Desc</option>
+              <option value="missing_both">Missing Both</option>
+            </select>
+            <svg style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "var(--p-color-icon)" }} width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M2 4.5l4 3.5 4-3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
 
-            <div style={{ width: "1px", background: "var(--p-color-border)", margin: "0 4px", alignSelf: "stretch" }} />
-
-            {/* Status filters */}
-            {(["all", "missing_title", "missing_desc", "missing_both", "generated", "approved", "published", "failed"] as FilterValue[]).map((f) => {
-              const labels: Record<FilterValue, string> = {
-                all: "All",
-                missing_title: "Missing Title",
-                missing_desc: "Missing Desc",
-                missing_both: "Missing Both",
-                generated: "Generated",
-                approved: "Approved",
-                published: "Published",
-                failed: "Failed",
-              };
-              return (
-                <s-button
-                  key={f}
-                  variant={filter === f ? "primary" : "secondary"}
-                  onClick={() => updateParam("filter", f)}
-                >
-                  {labels[f]}
-                </s-button>
-              );
-            })}
-          </s-stack>
-
-          <s-stack direction="inline" gap="small-200" alignItems="center">
-            <div style={{ minWidth: "240px" }}>
-              <s-text-field
-                label="Search by title"
-                labelAccessibilityVisibility="exclusive"
-                placeholder="Search..."
-                value={search}
-                onInput={(e: Event) => updateParam("search", (e.target as HTMLInputElement).value)}
-              />
-            </div>
-            <s-select
-              label="Tone"
+          {/* Tone filter */}
+          <div style={{ position: "relative", flexShrink: 0 }}>
+            <select
               value={tone}
-              onChange={(e: Event) => updateParam("tone", (e.target as HTMLSelectElement).value)}
+              onChange={(e) => updateParam("tone", e.target.value)}
+              style={{
+                padding: "5px 28px 5px 10px",
+                border: "1px solid var(--p-color-border)",
+                borderRadius: "8px",
+                background: "var(--p-color-bg-surface)",
+                color: "var(--p-color-text)",
+                fontSize: "13px",
+                fontWeight: "500",
+                cursor: "pointer",
+                outline: "none",
+                lineHeight: "20px",
+                minWidth: "128px",
+                WebkitAppearance: "none",
+                appearance: "none",
+              } as React.CSSProperties}
             >
-              <s-option value="professional">Professional</s-option>
-              <s-option value="friendly">Friendly</s-option>
-              <s-option value="minimal">Minimal</s-option>
-            </s-select>
-          </s-stack>
-        </s-stack>
+              <option value="professional">Professional</option>
+              <option value="friendly">Friendly</option>
+              <option value="minimal">Minimal</option>
+            </select>
+            <svg style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "var(--p-color-icon)" }} width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M2 4.5l4 3.5 4-3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+
+          {/* Divider */}
+          <div style={{ width: "1px", height: "22px", background: "var(--p-color-border)", flexShrink: 0, margin: "0 2px" }} />
+
+          {/* Search */}
+          <div style={{ position: "relative", flex: "1 1 180px", minWidth: "160px" }}>
+            <svg style={{ position: "absolute", left: "9px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "var(--p-color-icon-subdued)" }} width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <circle cx="6.5" cy="6.5" r="5" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M10.5 10.5L13.5 13.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            <input
+              type="search"
+              placeholder="Search by title…"
+              value={searchValue}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              style={{
+                display: "block",
+                width: "100%",
+                padding: "5px 10px 5px 30px",
+                border: "1px solid var(--p-color-border)",
+                borderRadius: "8px",
+                background: "var(--p-color-bg-surface)",
+                color: "var(--p-color-text)",
+                fontSize: "13px",
+                outline: "none",
+                lineHeight: "20px",
+                boxSizing: "border-box",
+              } as React.CSSProperties}
+            />
+          </div>
+
+        </div>
       </s-section>
 
       {/* ── Table ── */}
@@ -461,6 +620,8 @@ export default function MetaEditor() {
           pageInfo={pageInfo}
           searchParams={searchParams}
           setSearchParams={setSearchParams}
+          pageMode={pageMode}
+          currentPage={currentPage}
         />
       </s-section>
     </>

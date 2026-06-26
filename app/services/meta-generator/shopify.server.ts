@@ -58,6 +58,29 @@ const ARTICLES_COUNT_QUERY = `#graphql
   }
 `;
 
+const NODES_QUERY = `#graphql
+  query FetchNodes($ids: [ID!]!) {
+    nodes(ids: $ids) {
+      ... on Product {
+        id
+        title
+        handle
+        descriptionHtml
+        seo { title description }
+        updatedAt
+      }
+      ... on Article {
+        id
+        title
+        handle
+        contentHtml
+        seo { title description }
+        updatedAt
+      }
+    }
+  }
+`;
+
 const PRODUCT_UPDATE_MUTATION = `#graphql
   mutation ProductUpdateSeo($input: ProductInput!) {
     productUpdate(input: $input) {
@@ -166,6 +189,67 @@ export async function fetchArticlesCount(
   });
   const json = await response.json() as { data: { articlesCount: { count: number } } };
   return json.data.articlesCount.count;
+}
+
+// Fetch specific products by their GIDs using the id: filter query.
+// Uses the same products query as the "all" path — avoids the nodes query
+// which can fail silently for certain API versions or permission configs.
+export async function fetchProductsByIds(
+  admin: { graphql: AdminGraphQL },
+  gids: string[],
+): Promise<ShopifyProduct[]> {
+  if (gids.length === 0) return [];
+  const numericIds = gids.map((g) => g.split("/").pop()).filter(Boolean) as string[];
+  const query = numericIds.map((id) => `id:${id}`).join(" OR ");
+  const { products } = await fetchProducts(admin, { first: gids.length, query });
+  return products;
+}
+
+// Fetch specific articles by their GIDs using the id: filter query.
+export async function fetchArticlesByIds(
+  admin: { graphql: AdminGraphQL },
+  gids: string[],
+): Promise<ShopifyArticle[]> {
+  if (gids.length === 0) return [];
+  const numericIds = gids.map((g) => g.split("/").pop()).filter(Boolean) as string[];
+  const query = numericIds.map((id) => `id:${id}`).join(" OR ");
+  const { articles } = await fetchArticles(admin, { first: gids.length, query });
+  return articles;
+}
+
+type FetchedNode = {
+  id: string;
+  title: string;
+  handle: string;
+  seo: { title: string | null; description: string | null };
+  updatedAt: string;
+  descriptionHtml?: string;
+  contentHtml?: string;
+};
+
+export async function fetchNodesByIds(
+  admin: { graphql: AdminGraphQL },
+  ids: string[],
+): Promise<FetchedNode[]> {
+  if (ids.length === 0) return [];
+  const response = await admin.graphql(NODES_QUERY, { variables: { ids } });
+  const json = await response.json() as {
+    data?: { nodes?: Array<FetchedNode | null> | null } | null;
+    errors?: Array<{ message: string }>;
+  };
+  if (json.errors?.length) {
+    console.error("[fetchNodesByIds] GraphQL errors:", JSON.stringify(json.errors));
+  }
+  const nodes = json.data?.nodes;
+  if (!nodes) return [];
+  return nodes.filter(
+    (n): n is FetchedNode =>
+      n !== null &&
+      n !== undefined &&
+      typeof n.id === "string" &&
+      n.seo !== null &&
+      n.seo !== undefined,
+  );
 }
 
 export async function publishProductSeo(
