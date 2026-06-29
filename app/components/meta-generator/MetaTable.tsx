@@ -119,9 +119,7 @@ function MetaRow({ record, selected, tone, onSelect, fetcher }: RowProps) {
           label={`Select ${record.title}`}
           labelAccessibilityVisibility="exclusive"
           checked={selected}
-          onChange={(e: Event) =>
-            onSelect(record.resourceId, (e.target as HTMLInputElement).checked)
-          }
+          onChange={() => onSelect(record.resourceId, !selected)}
         />
       </s-table-cell>
 
@@ -396,11 +394,14 @@ export function MetaTable({
     records.some((r) => selectedIds.has(r.resourceId)) && !allSelected;
 
   const handleSelectAll = useCallback(
-    (e: Event) => {
-      const checked = (e.target as HTMLInputElement).checked;
-      setSelectedIds(
-        checked ? new Set(records.map((r) => r.resourceId)) : new Set(),
-      );
+    () => {
+      setSelectedIds((prev) => {
+        const allCurrentlySelected =
+          records.length > 0 && records.every((r) => prev.has(r.resourceId));
+        return allCurrentlySelected
+          ? new Set()
+          : new Set(records.map((r) => r.resourceId));
+      });
     },
     [records],
   );
@@ -424,6 +425,14 @@ export function MetaTable({
     fetcher.submit(fd, { method: "POST" });
     setSelectedIds(new Set());
   };
+
+  // Which bulk action (if any) is currently in flight
+  const inFlightIntent =
+    fetcher.state !== "idle"
+      ? (fetcher.formData?.get("_intent") as string | null)
+      : null;
+  const bulkInFlight = inFlightIntent?.startsWith("bulk_") ?? false;
+  const isBulkAction = (intent: string) => inFlightIntent === intent;
 
   const exportCsv = () => {
     const rows =
@@ -490,46 +499,62 @@ export function MetaTable({
       {/* Bulk actions bar */}
       {selectedIds.size > 0 && (
         <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-stack
-            direction="inline"
-            gap="base"
-            alignItems="center"
-            justifyContent="space-between"
-          >
-            <s-text>
+          <s-stack direction="block" gap="small-200">
+            <s-text type="strong">
               {selectedIds.size} record{selectedIds.size !== 1 ? "s" : ""}{" "}
               selected
             </s-text>
-            <s-button-group>
+            {/* Raw flex container so the buttons always wrap and stay visible,
+                no matter how narrow the embedded admin viewport is. */}
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "8px",
+                alignItems: "center",
+              }}
+            >
               <s-button
-                variant="secondary"
+                variant="primary"
                 onClick={() => submitBulk("bulk_generate")}
+                {...(isBulkAction("bulk_generate") ? { loading: true } : {})}
+                disabled={bulkInFlight || undefined}
               >
                 Bulk Generate
               </s-button>
               <s-button
                 variant="primary"
                 onClick={() => submitBulk("bulk_approve")}
+                {...(isBulkAction("bulk_approve") ? { loading: true } : {})}
+                disabled={bulkInFlight || undefined}
               >
                 Bulk Approve
               </s-button>
-              <s-button
+              {/* <s-button
                 variant="secondary"
                 tone="critical"
                 onClick={() => submitBulk("bulk_reject")}
+                {...(isBulkAction("bulk_reject") ? { loading: true } : {})}
+                disabled={bulkInFlight || undefined}
               >
                 Bulk Reject
               </s-button>
               <s-button
-                variant="secondary"
+                variant="primary"
                 onClick={() => submitBulk("bulk_publish")}
+                {...(isBulkAction("bulk_publish") ? { loading: true } : {})}
+                disabled={bulkInFlight || undefined}
               >
                 Bulk Publish
-              </s-button>
-              <s-button variant="secondary" onClick={exportCsv}>
+              </s-button> */}
+              <s-button
+                variant="secondary"
+                onClick={exportCsv}
+                disabled={bulkInFlight || undefined}
+              >
                 Export CSV
               </s-button>
-            </s-button-group>
+            </div>
           </s-stack>
         </s-box>
       )}

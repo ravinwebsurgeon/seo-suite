@@ -263,7 +263,7 @@ export default function SchemaBuilder() {
         <s-section>
           <s-banner tone="critical">
             <s-stack direction="block" gap="small">
-              <s-text fontWeight="semibold">Validation errors</s-text>
+              <s-text type="strong">Validation errors</s-text>
               {errors.map((err) => (
                 <s-paragraph key={err.field}>• {err.message}</s-paragraph>
               ))}

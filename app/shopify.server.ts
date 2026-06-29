@@ -2,9 +2,24 @@ import "@shopify/shopify-app-react-router/adapters/node";
 import {
   ApiVersion,
   AppDistribution,
+  LogSeverity,
   shopifyApp,
 } from "@shopify/shopify-app-react-router/server";
 import { DrizzleSessionStorage } from "./db/session-storage.server";
+
+// Set SHOPIFY_LOG_LEVEL=debug to see the auth/session-token decisions in the
+// terminal ("going to bounce page", "No valid session found", "Responding to
+// invalid access token", "Authenticate returned a response"). Invaluable for
+// diagnosing intermittent "Handling response" hangs. Defaults to Info.
+const LOG_LEVELS: Record<string, LogSeverity> = {
+  error: LogSeverity.Error,
+  warning: LogSeverity.Warning,
+  info: LogSeverity.Info,
+  debug: LogSeverity.Debug,
+};
+const logLevel =
+  LOG_LEVELS[(process.env.SHOPIFY_LOG_LEVEL || "").toLowerCase()] ??
+  LogSeverity.Info;
 
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
@@ -15,6 +30,7 @@ const shopify = shopifyApp({
   authPathPrefix: "/auth",
   sessionStorage: new DrizzleSessionStorage(),
   distribution: AppDistribution.AppStore,
+  logger: { level: logLevel },
   future: {
     expiringOfflineAccessTokens: true,
   },

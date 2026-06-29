@@ -1,5 +1,5 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { Outlet, useLocation, NavLink } from "react-router";
+import { Outlet, useLocation, NavLink, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 
@@ -39,16 +39,14 @@ export default function MetaGeneratorLayout() {
   );
 }
 
+// Must delegate to `boundary.error`. Shopify's auth flow signals reauthorization
+// by *throwing* a Response (an empty 401 with a retry header for data requests,
+// or App Bridge HTML for document requests). A custom boundary that renders a
+// static banner instead of calling `boundary.error` swallows that signal, so
+// App Bridge never retries with a fresh session token — the module breaks until
+// a manual refresh. Render our own UI only for genuine (non-Response) errors.
 export function ErrorBoundary() {
-  return (
-    <s-page heading="Bulk Meta Generator / Editor">
-      <s-section>
-        <s-banner tone="critical" heading="Something went wrong">
-          An error occurred. Please try again.
-        </s-banner>
-      </s-section>
-    </s-page>
-  );
+  return boundary.error(useRouteError());
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

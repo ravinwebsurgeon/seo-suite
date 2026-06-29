@@ -233,6 +233,26 @@ export async function getResourceIdsByStatus(
   return rows.map((r) => r.resourceId);
 }
 
+// Resource IDs that have a row in any of the given statuses. Used to derive the
+// "pending" set (= every catalog resource NOT in an acted status).
+export async function getResourceIdsByStatuses(
+  shopId: string,
+  statuses: MetaStatus[],
+  resourceType?: "product" | "article",
+): Promise<string[]> {
+  if (statuses.length === 0) return [];
+  const conditions = [
+    eq(seoMetaGenerations.shopId, shopId),
+    inArray(seoMetaGenerations.status, statuses),
+    ...(resourceType ? [eq(seoMetaGenerations.resourceType, resourceType)] : []),
+  ];
+  const rows = await db
+    .select({ resourceId: seoMetaGenerations.resourceId })
+    .from(seoMetaGenerations)
+    .where(and(...conditions));
+  return rows.map((r) => r.resourceId);
+}
+
 // ─── Jobs ─────────────────────────────────────────────────────────────────────
 
 export async function createJob(params: {

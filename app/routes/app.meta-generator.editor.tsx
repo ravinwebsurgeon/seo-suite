@@ -9,6 +9,8 @@ import {
   fetchArticles,
   fetchProductsByIds,
   fetchArticlesByIds,
+  fetchResourceIdsMissingSeo,
+  fetchAllResourceIds,
   publishProductSeo,
   publishArticleSeo,
 } from "../services/meta-generator/shopify.server";
@@ -20,6 +22,7 @@ import {
   updateMetaStatus,
   bulkUpdateMetaStatus,
   getResourceIdsByStatus,
+  getResourceIdsByStatuses,
 } from "../services/meta-generator/db.server";
 import { generateMeta } from "../services/meta-generator/claude.server";
 import { enqueueMetaJob } from "../services/meta-generator/queue.server";
@@ -35,10 +38,25 @@ import type {
 
 // ─── Loader ──────────────────────────────────────────────────────────────────
 
+// Statuses that live ONLY in our DB (Shopify knows nothing about them). For
+// these we read the matching IDs straight from the DB. `pending` is handled
+// separately because it must also include untracked resources that have no row.
 const STATUS_FILTER_VALUES = ["generated", "approved", "rejected", "published", "failed"] as const;
 type StatusFilterValue = typeof STATUS_FILTER_VALUES[number];
 const isStatusFilter = (f: string): f is StatusFilterValue =>
   (STATUS_FILTER_VALUES as readonly string[]).includes(f);
+
+// "Acted" statuses — anything here means the resource is NOT pending.
+const ACTED_STATUSES: MetaStatus[] = ["generated", "approved", "rejected", "published", "failed"];
+
+// Missing-SEO filter → the kind of emptiness it checks.
+const MISSING_SEO_KIND = {
+  missing_title: "title",
+  missing_desc: "desc",
+  missing_both: "both",
+} as const;
+const isMissingSeoFilter = (f: string): f is keyof typeof MISSING_SEO_KIND =>
+  Object.prototype.hasOwnProperty.call(MISSING_SEO_KIND, f);
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
@@ -62,140 +80,127 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const isArticles = resourceFilter === "articles";
   const resourceType = isArticles ? "article" : "product";
 
+  // Hydrate a page of resource GIDs into full MetaRecords by joining live
+  // Shopify data (title, handle, current SEO) with our DB rows (generated meta,
+  // status, keyword). Used by every ID-driven filter so they all behave the
+  // same. `statusFallback` is the status to show for resources with no DB row.
+  const hydrateByIds = async (
+    pageIds: string[],
+    statusFallback: MetaStatus,
+  ): Promise<MetaRecord[]> => {
+    if (pageIds.length === 0) return [];
+    const [shopifyItems, keywordMap, metaRows] = await Promise.all([
+      isArticles ? fetchArticlesByIds(admin, pageIds) : fetchProductsByIds(admin, pageIds),
+      getKeywordsForIds(shopId, pageIds),
+      getMetaRecordsForIds(shopId, pageIds),
+    ]);
+    const metaMap = new Map(metaRows.map((r) => [r.resourceId, r]));
+
+    let recs: MetaRecord[] = shopifyItems.map((item) => {
+      const meta = metaMap.get(item.id);
+      return {
+        resourceId: item.id,
+        resourceType: resourceType as MetaRecord["resourceType"],
+        title: item.title,
+        handle: item.handle,
+        currentSeoTitle: item.seo?.title ?? null,
+        currentSeoDescription: item.seo?.description ?? null,
+        keyword: keywordMap.get(item.id) ?? null,
+        generatedTitle: meta?.generatedTitle ?? null,
+        generatedDescription: meta?.generatedDescription ?? null,
+        tone: (meta?.tone ?? tone) as Tone,
+        status: (meta?.status ?? statusFallback) as MetaStatus,
+        dbId: meta?.id ?? null,
+        updatedAt: item.updatedAt,
+      };
+    });
+
+    if (search) {
+      const q = search.toLowerCase();
+      recs = recs.filter((r) => r.title.toLowerCase().includes(q));
+    }
+    return recs;
+  };
+
+  // Slice a full ID list to the requested offset page and set offset pageInfo.
+  const paginateIds = (allIds: string[]): string[] => {
+    pageMode = "offset";
+    currentPage = page;
+    const offset = (page - 1) * PAGE_SIZE;
+    pageInfo = {
+      hasNextPage: offset + PAGE_SIZE < allIds.length,
+      hasPreviousPage: page > 1,
+      startCursor: null,
+      endCursor: null,
+    };
+    return allIds.slice(offset, offset + PAGE_SIZE);
+  };
+
   try {
     if (isStatusFilter(filter)) {
-      // DB-first: get all IDs with this status, then paginate and fetch from Shopify
-      pageMode = "offset";
-      currentPage = page;
-
+      // DB-only statuses (generated/approved/rejected/published/failed): the set
+      // of IDs comes straight from our DB, then we hydrate the visible page.
       const allIds = await getResourceIdsByStatus(shopId, filter as MetaStatus, resourceType);
-      const totalCount = allIds.length;
-      const offset = (page - 1) * PAGE_SIZE;
-      const pageIds = allIds.slice(offset, offset + PAGE_SIZE);
-
-      pageInfo = {
-        hasNextPage: offset + PAGE_SIZE < totalCount,
-        hasPreviousPage: page > 1,
-        startCursor: null,
-        endCursor: null,
-      };
-
-      if (pageIds.length > 0) {
-        const [shopifyItems, keywordMap, metaRows] = await Promise.all([
-          isArticles
-            ? fetchArticlesByIds(admin, pageIds)
-            : fetchProductsByIds(admin, pageIds),
-          getKeywordsForIds(shopId, pageIds),
-          getMetaRecordsForIds(shopId, pageIds),
-        ]);
-        const metaMap = new Map(metaRows.map((r) => [r.resourceId, r]));
-
-        records = shopifyItems.map((item) => {
-          const meta = metaMap.get(item.id);
-          return {
-            resourceId: item.id,
-            resourceType: resourceType as MetaRecord["resourceType"],
-            title: item.title,
-            handle: item.handle,
-            currentSeoTitle: item.seo?.title ?? null,
-            currentSeoDescription: item.seo?.description ?? null,
-            keyword: keywordMap.get(item.id) ?? null,
-            generatedTitle: meta?.generatedTitle ?? null,
-            generatedDescription: meta?.generatedDescription ?? null,
-            tone: (meta?.tone ?? tone) as Tone,
-            status: (meta?.status ?? filter) as MetaStatus,
-            dbId: meta?.id ?? null,
-            updatedAt: item.updatedAt,
-          };
-        });
-
-        if (search) {
-          records = records.filter((r) =>
-            r.title.toLowerCase().includes(search.toLowerCase()),
-          );
-        }
-      }
+      records = await hydrateByIds(paginateIds(allIds), filter as MetaStatus);
+    } else if (filter === "pending") {
+      // "Pending" = every catalog resource that is NOT in an acted status. That
+      // includes untracked resources (no DB row) AND rows explicitly marked
+      // pending — which is why it can't be answered from the DB alone. We scan
+      // the catalog for all IDs and subtract the acted ones.
+      const [allCatalogIds, actedIds] = await Promise.all([
+        fetchAllResourceIds(admin, resourceType),
+        getResourceIdsByStatuses(shopId, ACTED_STATUSES, resourceType),
+      ]);
+      const acted = new Set(actedIds);
+      const pendingIds = allCatalogIds.filter((id) => !acted.has(id));
+      records = await hydrateByIds(paginateIds(pendingIds), "pending");
+    } else if (isMissingSeoFilter(filter)) {
+      // Shopify SEO-state filter: scan the whole catalog for empty SEO fields
+      // (Shopify search can't query empty fields), then page the matches. Uses
+      // the same emptiness rule as the dashboard so counts and rows agree.
+      const allIds = await fetchResourceIdsMissingSeo(admin, resourceType, MISSING_SEO_KIND[filter]);
+      records = await hydrateByIds(paginateIds(allIds), "pending");
     } else {
-      // Shopify-first: cursor-based pagination from Shopify, then filter by SEO fields
+      // "all": straight cursor pagination over Shopify, no post-filtering.
       pageMode = "cursor";
       const shopifyQuery = search ? `title:${search}*` : undefined;
+      const commonArgs = {
+        first: before ? undefined : PAGE_SIZE,
+        last: before ? PAGE_SIZE : undefined,
+        after: after ?? undefined,
+        before: before ?? undefined,
+        query: shopifyQuery ?? undefined,
+      };
 
-      if (!isArticles) {
-        const { products, pageInfo: pi } = await fetchProducts(admin, {
-          first: before ? undefined : PAGE_SIZE,
-          last: before ? PAGE_SIZE : undefined,
-          after: after ?? undefined,
-          before: before ?? undefined,
-          query: shopifyQuery ?? undefined,
-        });
-        pageInfo = pi;
+      const items = !isArticles
+        ? (await fetchProducts(admin, commonArgs).then((r) => ((pageInfo = r.pageInfo), r.products)))
+        : (await fetchArticles(admin, commonArgs).then((r) => ((pageInfo = r.pageInfo), r.articles)));
 
-        const ids = products.map((p) => p.id);
-        const [keywordMap, metaRows] = await Promise.all([
-          getKeywordsForIds(shopId, ids),
-          getMetaRecordsForIds(shopId, ids),
-        ]);
-        const metaMap = new Map(metaRows.map((r) => [r.resourceId, r]));
+      const ids = items.map((i) => i.id);
+      const [keywordMap, metaRows] = await Promise.all([
+        getKeywordsForIds(shopId, ids),
+        getMetaRecordsForIds(shopId, ids),
+      ]);
+      const metaMap = new Map(metaRows.map((r) => [r.resourceId, r]));
 
-        records = products.map((p) => {
-          const meta = metaMap.get(p.id);
-          return {
-            resourceId: p.id,
-            resourceType: "product" as const,
-            title: p.title,
-            handle: p.handle,
-            currentSeoTitle: p.seo?.title ?? null,
-            currentSeoDescription: p.seo?.description ?? null,
-            keyword: keywordMap.get(p.id) ?? null,
-            generatedTitle: meta?.generatedTitle ?? null,
-            generatedDescription: meta?.generatedDescription ?? null,
-            tone: (meta?.tone ?? tone) as Tone,
-            status: (meta?.status ?? "pending") as MetaStatus,
-            dbId: meta?.id ?? null,
-            updatedAt: p.updatedAt,
-          };
-        });
-      } else {
-        const { articles, pageInfo: pi } = await fetchArticles(admin, {
-          first: before ? undefined : PAGE_SIZE,
-          last: before ? PAGE_SIZE : undefined,
-          after: after ?? undefined,
-          before: before ?? undefined,
-          query: shopifyQuery ?? undefined,
-        });
-        pageInfo = pi;
-
-        const ids = articles.map((a) => a.id);
-        const [keywordMap, metaRows] = await Promise.all([
-          getKeywordsForIds(shopId, ids),
-          getMetaRecordsForIds(shopId, ids),
-        ]);
-        const metaMap = new Map(metaRows.map((r) => [r.resourceId, r]));
-
-        records = articles.map((a) => {
-          const meta = metaMap.get(a.id);
-          return {
-            resourceId: a.id,
-            resourceType: "article" as const,
-            title: a.title,
-            handle: a.handle,
-            currentSeoTitle: a.seo?.title ?? null,
-            currentSeoDescription: a.seo?.description ?? null,
-            keyword: keywordMap.get(a.id) ?? null,
-            generatedTitle: meta?.generatedTitle ?? null,
-            generatedDescription: meta?.generatedDescription ?? null,
-            tone: (meta?.tone ?? tone) as Tone,
-            status: (meta?.status ?? "pending") as MetaStatus,
-            dbId: meta?.id ?? null,
-            updatedAt: a.updatedAt,
-          };
-        });
-      }
-
-      if (filter === "pending") records = records.filter((r) => r.status === "pending");
-      else if (filter === "missing_title") records = records.filter((r) => !r.currentSeoTitle);
-      else if (filter === "missing_desc") records = records.filter((r) => !r.currentSeoDescription);
-      else if (filter === "missing_both") records = records.filter((r) => !r.currentSeoTitle && !r.currentSeoDescription);
+      records = items.map((item) => {
+        const meta = metaMap.get(item.id);
+        return {
+          resourceId: item.id,
+          resourceType: resourceType as MetaRecord["resourceType"],
+          title: item.title,
+          handle: item.handle,
+          currentSeoTitle: item.seo?.title ?? null,
+          currentSeoDescription: item.seo?.description ?? null,
+          keyword: keywordMap.get(item.id) ?? null,
+          generatedTitle: meta?.generatedTitle ?? null,
+          generatedDescription: meta?.generatedDescription ?? null,
+          tone: (meta?.tone ?? tone) as Tone,
+          status: (meta?.status ?? "pending") as MetaStatus,
+          dbId: meta?.id ?? null,
+          updatedAt: item.updatedAt,
+        };
+      });
     }
   } catch (err) {
     console.error("[editor loader] filter=%s resource=%s error:", filter, resourceFilter, err);
@@ -538,9 +543,9 @@ export default function MetaEditor() {
               <option value="rejected">Rejected</option>
               <option value="published">Published</option>
               <option value="failed">Failed</option>
-              <option value="missing_title">Missing Title</option>
+              {/* <option value="missing_title">Missing Title</option>
               <option value="missing_desc">Missing Desc</option>
-              <option value="missing_both">Missing Both</option>
+              <option value="missing_both">Missing Both</option> */}
             </select>
             <svg style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "var(--p-color-icon)" }} width="12" height="12" viewBox="0 0 12 12" fill="none">
               <path d="M2 4.5l4 3.5 4-3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />

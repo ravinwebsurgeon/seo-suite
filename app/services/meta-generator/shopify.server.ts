@@ -58,6 +58,29 @@ const ARTICLES_COUNT_QUERY = `#graphql
   }
 `;
 
+// Lightweight queries used to tally SEO-completeness stats. Shopify's product
+// search syntax does NOT support `seo_title:''` / `seo_description:''` filters,
+// so we can't ask the API to count missing-SEO resources directly. Instead we
+// page through every resource fetching only `id` + `seo` and tally locally —
+// this reflects real, published SEO state immediately after an edit.
+const PRODUCTS_SEO_PAGE_QUERY = `#graphql
+  query ProductsSeoPage($first: Int!, $after: String) {
+    products(first: $first, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      edges { node { id seo { title description } } }
+    }
+  }
+`;
+
+const ARTICLES_SEO_PAGE_QUERY = `#graphql
+  query ArticlesSeoPage($first: Int!, $after: String) {
+    articles(first: $first, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      edges { node { id seo { title description } } }
+    }
+  }
+`;
+
 const NODES_QUERY = `#graphql
   query FetchNodes($ids: [ID!]!) {
     nodes(ids: $ids) {
@@ -189,6 +212,164 @@ export async function fetchArticlesCount(
   });
   const json = await response.json() as { data: { articlesCount: { count: number } } };
   return json.data.articlesCount.count;
+}
+
+export interface SeoCompletenessStats {
+  total: number;
+  missingTitle: number;
+  missingDescription: number;
+  missingBoth: number;
+}
+
+// Treat null, "", and whitespace-only values as "missing" — mirrors the
+// editor's `!r.currentSeoTitle` filtering so the dashboard agrees with it.
+const isSeoEmpty = (value: string | null | undefined): boolean => !value || value.trim() === "";
+
+// Page size capped at 250 (Shopify's max for a connection). A safety cap on
+// total pages prevents runaway loops on very large catalogs; if hit, counts
+// reflect the pages scanned and `hasNextPage` is logged.
+const SEO_PAGE_SIZE = 250;
+const SEO_MAX_PAGES = 200; // up to 50k resources
+
+async function computeSeoStats(
+  admin: { graphql: AdminGraphQL },
+  query: string,
+  rootKey: "products" | "articles",
+): Promise<SeoCompletenessStats> {
+  const stats: SeoCompletenessStats = { total: 0, missingTitle: 0, missingDescription: 0, missingBoth: 0 };
+  let after: string | null = null;
+  let pages = 0;
+
+  do {
+    const response = await admin.graphql(query, {
+      variables: { first: SEO_PAGE_SIZE, after },
+    });
+    const json = await response.json() as {
+      data?: Record<string, {
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        edges: Array<{ node: { id: string; seo: { title: string | null; description: string | null } } }>;
+      }>;
+    };
+    const conn = json.data?.[rootKey];
+    if (!conn) break;
+
+    for (const { node } of conn.edges) {
+      stats.total += 1;
+      const noTitle = isSeoEmpty(node.seo?.title);
+      const noDesc = isSeoEmpty(node.seo?.description);
+      // Mutually-exclusive buckets, matching the editor's filters: a product
+      // missing both fields is counted ONLY in missingBoth. So `missingTitle` ==
+      // the editor's "Missing Title" filter (title empty, description present),
+      // `missingDescription` likewise, and they never double-count.
+      if (noTitle && noDesc) stats.missingBoth += 1;
+      else if (noTitle) stats.missingTitle += 1;
+      else if (noDesc) stats.missingDescription += 1;
+    }
+
+    pages += 1;
+    after = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
+    if (after && pages >= SEO_MAX_PAGES) {
+      console.warn(`[computeSeoStats] ${rootKey}: hit page cap (${SEO_MAX_PAGES}); counts cover first ${stats.total} only`);
+      break;
+    }
+  } while (after);
+
+  return stats;
+}
+
+// Count products by SEO completeness. Buckets are mutually exclusive: a product
+// missing both fields counts only toward `missingBoth`, so `missingTitle` /
+// `missingDescription` / `missingBoth` never overlap and each card equals the
+// matching editor filter ("Missing Title" / "Missing Desc" / "Missing Both").
+export function computeProductSeoStats(admin: { graphql: AdminGraphQL }): Promise<SeoCompletenessStats> {
+  return computeSeoStats(admin, PRODUCTS_SEO_PAGE_QUERY, "products");
+}
+
+export function computeArticleSeoStats(admin: { graphql: AdminGraphQL }): Promise<SeoCompletenessStats> {
+  return computeSeoStats(admin, ARTICLES_SEO_PAGE_QUERY, "articles");
+}
+
+export type MissingSeoKind = "title" | "desc" | "both";
+
+// Page over the id+seo query, invoking `onNode` for every resource. Shared by
+// the missing-SEO and "all IDs" scans below. Honours the same page cap as the
+// dashboard stats. Returns true if the cap was hit (results are partial).
+async function scanSeoPages(
+  admin: { graphql: AdminGraphQL },
+  resourceType: "product" | "article",
+  onNode: (node: { id: string; seo: { title: string | null; description: string | null } }) => void,
+): Promise<boolean> {
+  const isArticles = resourceType === "article";
+  const query = isArticles ? ARTICLES_SEO_PAGE_QUERY : PRODUCTS_SEO_PAGE_QUERY;
+  const rootKey = isArticles ? "articles" : "products";
+  let after: string | null = null;
+  let pages = 0;
+
+  do {
+    const response = await admin.graphql(query, { variables: { first: SEO_PAGE_SIZE, after } });
+    const json = await response.json() as {
+      data?: Record<string, {
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        edges: Array<{ node: { id: string; seo: { title: string | null; description: string | null } } }>;
+      }>;
+    };
+    const conn = json.data?.[rootKey];
+    if (!conn) break;
+
+    for (const { node } of conn.edges) onNode(node);
+
+    pages += 1;
+    after = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
+    if (after && pages >= SEO_MAX_PAGES) {
+      console.warn(`[scanSeoPages] ${rootKey}: hit page cap (${SEO_MAX_PAGES}); scan is partial`);
+      return true;
+    }
+  } while (after);
+
+  return false;
+}
+
+// Scan the whole catalog and return the GIDs whose SEO is missing per `kind`.
+// Buckets are MUTUALLY EXCLUSIVE so each product appears under exactly one
+// filter:
+//   - "title" → SEO title empty but description present
+//   - "desc"  → description empty but SEO title present
+//   - "both"  → both empty
+// A product missing both fields belongs to "both" only — it is NOT listed under
+// "title" or "desc". Uses the same `isSeoEmpty` rule (null / "" / whitespace) as
+// the dashboard. Shopify search can't filter on empty SEO fields, so a full scan
+// is the only correct approach.
+export async function fetchResourceIdsMissingSeo(
+  admin: { graphql: AdminGraphQL },
+  resourceType: "product" | "article",
+  kind: MissingSeoKind,
+): Promise<string[]> {
+  const ids: string[] = [];
+  await scanSeoPages(admin, resourceType, (node) => {
+    const noTitle = isSeoEmpty(node.seo?.title);
+    const noDesc = isSeoEmpty(node.seo?.description);
+    const match =
+      kind === "both"
+        ? noTitle && noDesc
+        : kind === "title"
+          ? noTitle && !noDesc
+          : !noTitle && noDesc;
+    if (match) ids.push(node.id);
+  });
+  return ids;
+}
+
+// Scan the whole catalog and return every resource GID, in Shopify's default
+// order. Used to resolve the "Pending" filter (= resources not in any acted
+// status), which can't come from the DB alone because untracked resources have
+// no row yet.
+export async function fetchAllResourceIds(
+  admin: { graphql: AdminGraphQL },
+  resourceType: "product" | "article",
+): Promise<string[]> {
+  const ids: string[] = [];
+  await scanSeoPages(admin, resourceType, (node) => ids.push(node.id));
+  return ids;
 }
 
 // Fetch specific products by their GIDs using the id: filter query.
