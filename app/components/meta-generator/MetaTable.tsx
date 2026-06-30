@@ -414,8 +414,33 @@ export function MetaTable({
     });
   }, []);
 
+  // Records currently selected on this page, and how they break down by status.
+  // Bulk actions act ONLY on the records they're valid for, mirroring the
+  // per-row buttons: you can only approve what's "generated" and only publish
+  // what's "approved". This prevents a bulk action from clobbering records in
+  // the wrong state (e.g. reverting a published row back to approved).
+  const selectedRecords = records.filter((r) => selectedIds.has(r.resourceId));
+  const generatableSelected = selectedRecords.filter(
+    (r) => r.status === "pending" || r.status === "rejected" ||
+      r.status === "generated" || r.status === "approved" || r.status === "published",
+  );
+  const approvableSelected = selectedRecords.filter((r) => r.status === "generated");
+  const publishableSelected = selectedRecords.filter((r) => r.status === "approved");
+
+  const canBulkGenerate = generatableSelected.length > 0;
+  const canBulkApprove = approvableSelected.length > 0;
+  const canBulkPublish = publishableSelected.length > 0;
+
+  // Eligible ids per intent — only these are submitted.
+  const eligibleIds = (intent: string): string[] => {
+    if (intent === "bulk_approve") return approvableSelected.map((r) => r.resourceId);
+    if (intent === "bulk_publish") return publishableSelected.map((r) => r.resourceId);
+    if (intent === "bulk_generate") return generatableSelected.map((r) => r.resourceId);
+    return [...selectedIds];
+  };
+
   const submitBulk = (intent: string) => {
-    const ids = [...selectedIds];
+    const ids = eligibleIds(intent);
     if (ids.length === 0) return;
     const fd = new FormData();
     fd.set("_intent", intent);
@@ -434,11 +459,16 @@ export function MetaTable({
   const bulkInFlight = inFlightIntent?.startsWith("bulk_") ?? false;
   const isBulkAction = (intent: string) => inFlightIntent === intent;
 
-  const exportCsv = () => {
-    const rows =
-      selectedIds.size === 0
-        ? records
-        : records.filter((r) => selectedIds.has(r.resourceId));
+  const triggerDownload = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const recordsToCsv = (rows: MetaRecord[]): string => {
     const header =
       "type,title,handle,keyword,current_title,current_description,generated_title,generated_description,status,updated_at";
     const csvRows = rows.map((r) =>
@@ -455,14 +485,40 @@ export function MetaTable({
         r.updatedAt,
       ].join(","),
     );
-    const csv = [header, ...csvRows].join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "seo-meta-export.csv";
-    a.click();
-    URL.revokeObjectURL(url);
+    return [header, ...csvRows].join("\n");
+  };
+
+  // Export only the rows currently selected on this page — client-side, instant.
+  const exportSelected = () => {
+    const rows = records.filter((r) => selectedIds.has(r.resourceId));
+    if (rows.length === 0) return;
+    triggerDownload(new Blob([recordsToCsv(rows)], { type: "text/csv;charset=utf-8;" }), "seo-meta-selected.csv");
+  };
+
+  const [exporting, setExporting] = useState(false);
+
+  // Export the FULL filtered set (every page) — delegated to the server export
+  // endpoint so it respects the active filters/search, not just this page.
+  // App Bridge patches `fetch` to attach the session token, so this is
+  // authenticated inside the embedded admin.
+  const exportAllFiltered = async () => {
+    setExporting(true);
+    try {
+      const params = new URLSearchParams();
+      for (const key of ["resource", "filter", "status", "search", "tone"]) {
+        const v = searchParams.get(key);
+        if (v) params.set(key, v);
+      }
+      const res = await fetch(`/app/meta-generator/export?${params.toString()}`);
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      triggerDownload(blob, `seo-meta-export.csv`);
+    } catch {
+      // Fall back to exporting the current page if the server export fails.
+      triggerDownload(new Blob([recordsToCsv(records)], { type: "text/csv;charset=utf-8;" }), "seo-meta-export.csv");
+    } finally {
+      setExporting(false);
+    }
   };
 
   const navigate = (direction: "next" | "prev") => {
@@ -518,17 +574,17 @@ export function MetaTable({
                 variant="primary"
                 onClick={() => submitBulk("bulk_generate")}
                 {...(isBulkAction("bulk_generate") ? { loading: true } : {})}
-                disabled={bulkInFlight || undefined}
+                disabled={(bulkInFlight || !canBulkGenerate) || undefined}
               >
-                Bulk Generate
+                Bulk Generate{canBulkGenerate ? ` (${generatableSelected.length})` : ""}
               </s-button>
               <s-button
                 variant="primary"
                 onClick={() => submitBulk("bulk_approve")}
                 {...(isBulkAction("bulk_approve") ? { loading: true } : {})}
-                disabled={bulkInFlight || undefined}
+                disabled={(bulkInFlight || !canBulkApprove) || undefined}
               >
-                Bulk Approve
+                Bulk Approve{canBulkApprove ? ` (${approvableSelected.length})` : ""}
               </s-button>
               {/* <s-button
                 variant="secondary"
@@ -538,30 +594,48 @@ export function MetaTable({
                 disabled={bulkInFlight || undefined}
               >
                 Bulk Reject
-              </s-button>
+              </s-button> */}
               <s-button
                 variant="primary"
                 onClick={() => submitBulk("bulk_publish")}
                 {...(isBulkAction("bulk_publish") ? { loading: true } : {})}
-                disabled={bulkInFlight || undefined}
+                disabled={(bulkInFlight || !canBulkPublish) || undefined}
               >
-                Bulk Publish
-              </s-button> */}
+                Bulk Publish{canBulkPublish ? ` (${publishableSelected.length})` : ""}
+              </s-button>
               <s-button
                 variant="secondary"
-                onClick={exportCsv}
+                onClick={exportSelected}
                 disabled={bulkInFlight || undefined}
               >
-                Export CSV
+                Export Selected
               </s-button>
             </div>
+
+            {/* Contextual guidance: explain why an action is unavailable so the
+                user knows the required next step instead of facing a dead button. */}
+            {!canBulkApprove && !canBulkPublish && approvableSelected.length === 0 && publishableSelected.length === 0 && (
+              <s-text tone="neutral">
+                Only Generated records can be approved and only Approved records can be published.
+              </s-text>
+            )}
+            {!canBulkPublish && canBulkApprove && (
+              <s-text tone="neutral">
+                Approve the selected records before publishing.
+              </s-text>
+            )}
           </s-stack>
         </s-box>
       )}
 
       {selectedIds.size === 0 && (
         <s-stack direction="inline" justifyContent="end">
-          <s-button variant="secondary" onClick={exportCsv}>
+          <s-button
+            variant="secondary"
+            onClick={exportAllFiltered}
+            {...(exporting ? { loading: true } : {})}
+            disabled={exporting || undefined}
+          >
             Export all as CSV
           </s-button>
         </s-stack>

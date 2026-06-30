@@ -5,32 +5,24 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import React, { useEffect, useState, useRef } from "react";
 import { authenticate } from "../shopify.server";
 import {
-  fetchProducts,
-  fetchArticles,
-  fetchProductsByIds,
-  fetchArticlesByIds,
-  fetchResourceIdsMissingSeo,
-  fetchAllResourceIds,
   publishProductSeo,
   publishArticleSeo,
 } from "../services/meta-generator/shopify.server";
 import {
   upsertKeyword,
-  getKeywordsForIds,
-  getMetaRecordsForIds,
+  getKeyword,
   upsertMetaRecord,
   updateMetaStatus,
   bulkUpdateMetaStatus,
-  getResourceIdsByStatus,
-  getResourceIdsByStatuses,
+  createJob,
+  getMetaRecordsForIds,
 } from "../services/meta-generator/db.server";
+import { resolveEditorPage } from "../services/meta-generator/editor-query.server";
 import { generateMeta } from "../services/meta-generator/claude.server";
 import { enqueueMetaJob } from "../services/meta-generator/queue.server";
-import { createJob } from "../services/meta-generator/db.server";
 import { MetaTable } from "../components/meta-generator/MetaTable";
 import type {
   MetaRecord,
-  FilterValue,
   ResourceFilter,
   Tone,
   MetaStatus,
@@ -38,175 +30,59 @@ import type {
 
 // ─── Loader ──────────────────────────────────────────────────────────────────
 
-// Statuses that live ONLY in our DB (Shopify knows nothing about them). For
-// these we read the matching IDs straight from the DB. `pending` is handled
-// separately because it must also include untracked resources that have no row.
-const STATUS_FILTER_VALUES = ["generated", "approved", "rejected", "published", "failed"] as const;
-type StatusFilterValue = typeof STATUS_FILTER_VALUES[number];
-const isStatusFilter = (f: string): f is StatusFilterValue =>
-  (STATUS_FILTER_VALUES as readonly string[]).includes(f);
-
-// "Acted" statuses — anything here means the resource is NOT pending.
-const ACTED_STATUSES: MetaStatus[] = ["generated", "approved", "rejected", "published", "failed"];
-
-// Missing-SEO filter → the kind of emptiness it checks.
-const MISSING_SEO_KIND = {
-  missing_title: "title",
-  missing_desc: "desc",
-  missing_both: "both",
-} as const;
-const isMissingSeoFilter = (f: string): f is keyof typeof MISSING_SEO_KIND =>
-  Object.prototype.hasOwnProperty.call(MISSING_SEO_KIND, f);
-
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const shopId = session.shop;
   const url = new URL(request.url);
 
   const resourceFilter = (url.searchParams.get("resource") ?? "products") as ResourceFilter;
-  const filter = (url.searchParams.get("filter") ?? "all") as FilterValue;
+  // `filter` = SEO-state (all | missing_title | missing_desc | missing_both).
+  // `status` = workflow status (all | pending | generated | approved | ...).
+  // The two are INDEPENDENT and combine (AND) so e.g. "Generated + Missing
+  // Title" is expressible — see Step 2/3 of the spec.
+  const filter = url.searchParams.get("filter") ?? "all";
+  const status = url.searchParams.get("status") ?? "all";
   const search = url.searchParams.get("search") ?? "";
   const tone = (url.searchParams.get("tone") ?? "professional") as Tone;
   const after = url.searchParams.get("after") ?? null;
   const before = url.searchParams.get("before") ?? null;
   const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1") || 1);
-  const PAGE_SIZE = 25;
 
-  let records: MetaRecord[] = [];
-  let pageInfo = { hasNextPage: false, hasPreviousPage: false, startCursor: null as string | null, endCursor: null as string | null };
-  let pageMode: "cursor" | "offset" = "cursor";
-  let currentPage = 1;
+  const resourceType = resourceFilter === "articles" ? "article" : "product";
 
-  const isArticles = resourceFilter === "articles";
-  const resourceType = isArticles ? "article" : "product";
-
-  // Hydrate a page of resource GIDs into full MetaRecords by joining live
-  // Shopify data (title, handle, current SEO) with our DB rows (generated meta,
-  // status, keyword). Used by every ID-driven filter so they all behave the
-  // same. `statusFallback` is the status to show for resources with no DB row.
-  const hydrateByIds = async (
-    pageIds: string[],
-    statusFallback: MetaStatus,
-  ): Promise<MetaRecord[]> => {
-    if (pageIds.length === 0) return [];
-    const [shopifyItems, keywordMap, metaRows] = await Promise.all([
-      isArticles ? fetchArticlesByIds(admin, pageIds) : fetchProductsByIds(admin, pageIds),
-      getKeywordsForIds(shopId, pageIds),
-      getMetaRecordsForIds(shopId, pageIds),
-    ]);
-    const metaMap = new Map(metaRows.map((r) => [r.resourceId, r]));
-
-    let recs: MetaRecord[] = shopifyItems.map((item) => {
-      const meta = metaMap.get(item.id);
-      return {
-        resourceId: item.id,
-        resourceType: resourceType as MetaRecord["resourceType"],
-        title: item.title,
-        handle: item.handle,
-        currentSeoTitle: item.seo?.title ?? null,
-        currentSeoDescription: item.seo?.description ?? null,
-        keyword: keywordMap.get(item.id) ?? null,
-        generatedTitle: meta?.generatedTitle ?? null,
-        generatedDescription: meta?.generatedDescription ?? null,
-        tone: (meta?.tone ?? tone) as Tone,
-        status: (meta?.status ?? statusFallback) as MetaStatus,
-        dbId: meta?.id ?? null,
-        updatedAt: item.updatedAt,
-      };
-    });
-
-    if (search) {
-      const q = search.toLowerCase();
-      recs = recs.filter((r) => r.title.toLowerCase().includes(q));
-    }
-    return recs;
-  };
-
-  // Slice a full ID list to the requested offset page and set offset pageInfo.
-  const paginateIds = (allIds: string[]): string[] => {
-    pageMode = "offset";
-    currentPage = page;
-    const offset = (page - 1) * PAGE_SIZE;
-    pageInfo = {
-      hasNextPage: offset + PAGE_SIZE < allIds.length,
-      hasPreviousPage: page > 1,
-      startCursor: null,
-      endCursor: null,
-    };
-    return allIds.slice(offset, offset + PAGE_SIZE);
+  let resolved = {
+    records: [] as MetaRecord[],
+    pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null as string | null, endCursor: null as string | null },
+    pageMode: "cursor" as "cursor" | "offset",
+    currentPage: 1,
   };
 
   try {
-    if (isStatusFilter(filter)) {
-      // DB-only statuses (generated/approved/rejected/published/failed): the set
-      // of IDs comes straight from our DB, then we hydrate the visible page.
-      const allIds = await getResourceIdsByStatus(shopId, filter as MetaStatus, resourceType);
-      records = await hydrateByIds(paginateIds(allIds), filter as MetaStatus);
-    } else if (filter === "pending") {
-      // "Pending" = every catalog resource that is NOT in an acted status. That
-      // includes untracked resources (no DB row) AND rows explicitly marked
-      // pending — which is why it can't be answered from the DB alone. We scan
-      // the catalog for all IDs and subtract the acted ones.
-      const [allCatalogIds, actedIds] = await Promise.all([
-        fetchAllResourceIds(admin, resourceType),
-        getResourceIdsByStatuses(shopId, ACTED_STATUSES, resourceType),
-      ]);
-      const acted = new Set(actedIds);
-      const pendingIds = allCatalogIds.filter((id) => !acted.has(id));
-      records = await hydrateByIds(paginateIds(pendingIds), "pending");
-    } else if (isMissingSeoFilter(filter)) {
-      // Shopify SEO-state filter: scan the whole catalog for empty SEO fields
-      // (Shopify search can't query empty fields), then page the matches. Uses
-      // the same emptiness rule as the dashboard so counts and rows agree.
-      const allIds = await fetchResourceIdsMissingSeo(admin, resourceType, MISSING_SEO_KIND[filter]);
-      records = await hydrateByIds(paginateIds(allIds), "pending");
-    } else {
-      // "all": straight cursor pagination over Shopify, no post-filtering.
-      pageMode = "cursor";
-      const shopifyQuery = search ? `title:${search}*` : undefined;
-      const commonArgs = {
-        first: before ? undefined : PAGE_SIZE,
-        last: before ? PAGE_SIZE : undefined,
-        after: after ?? undefined,
-        before: before ?? undefined,
-        query: shopifyQuery ?? undefined,
-      };
-
-      const items = !isArticles
-        ? (await fetchProducts(admin, commonArgs).then((r) => ((pageInfo = r.pageInfo), r.products)))
-        : (await fetchArticles(admin, commonArgs).then((r) => ((pageInfo = r.pageInfo), r.articles)));
-
-      const ids = items.map((i) => i.id);
-      const [keywordMap, metaRows] = await Promise.all([
-        getKeywordsForIds(shopId, ids),
-        getMetaRecordsForIds(shopId, ids),
-      ]);
-      const metaMap = new Map(metaRows.map((r) => [r.resourceId, r]));
-
-      records = items.map((item) => {
-        const meta = metaMap.get(item.id);
-        return {
-          resourceId: item.id,
-          resourceType: resourceType as MetaRecord["resourceType"],
-          title: item.title,
-          handle: item.handle,
-          currentSeoTitle: item.seo?.title ?? null,
-          currentSeoDescription: item.seo?.description ?? null,
-          keyword: keywordMap.get(item.id) ?? null,
-          generatedTitle: meta?.generatedTitle ?? null,
-          generatedDescription: meta?.generatedDescription ?? null,
-          tone: (meta?.tone ?? tone) as Tone,
-          status: (meta?.status ?? "pending") as MetaStatus,
-          dbId: meta?.id ?? null,
-          updatedAt: item.updatedAt,
-        };
-      });
-    }
+    resolved = await resolveEditorPage(admin, shopId, {
+      resourceType,
+      filter,
+      status,
+      search,
+      tone,
+      after,
+      before,
+      page,
+    });
   } catch (err) {
-    console.error("[editor loader] filter=%s resource=%s error:", filter, resourceFilter, err);
+    console.error("[editor loader] filter=%s status=%s resource=%s error:", filter, status, resourceFilter, err);
   }
 
-  return { records, pageInfo, filter, resourceFilter, search, tone, pageMode, currentPage };
+  return {
+    records: resolved.records,
+    pageInfo: resolved.pageInfo,
+    filter,
+    status,
+    resourceFilter,
+    search,
+    tone,
+    pageMode: resolved.pageMode,
+    currentPage: resolved.currentPage,
+  };
 };
 
 // ─── Action ──────────────────────────────────────────────────────────────────
@@ -355,15 +231,13 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<ActionRes
     if (!queued) {
       // Fallback: process inline for small batches when Redis unavailable
       if (ids.length <= 10) {
-        let processed = 0;
         for (const resourceId of ids) {
           try {
-            const keyword = await (await import("../services/meta-generator/db.server")).getKeyword(shopId, resourceId);
+            const keyword = await getKeyword(shopId, resourceId);
             // We don't have content here; use title only
             const title = formData.get(`title_${resourceId}`) as string ?? resourceId;
             const generated = await generateMeta({ title, contentHtml: "", keyword, tone, resourceType });
             await upsertMetaRecord({ shopId, resourceId, resourceType, generatedTitle: generated.title_tag, generatedDescription: generated.meta_description, tone, status: "generated" });
-            processed++;
           } catch (err) {
             await updateMetaStatus(shopId, resourceId, "failed", String(err));
           }
@@ -389,7 +263,7 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<ActionRes
       totalRecords: ids.length,
     });
 
-    await enqueueMetaJob(
+    const queued = await enqueueMetaJob(
       {
         shopId,
         accessToken: session.accessToken ?? "",
@@ -403,6 +277,40 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<ActionRes
       },
       jobId,
     );
+
+    if (!queued) {
+      // No Redis worker available: publish inline using the already-approved
+      // values so a small batch still reaches Shopify instead of silently
+      // reporting success while nothing is written.
+      if (ids.length <= 10) {
+        let published = 0;
+        const records = await getMetaRecordsForIds(shopId, ids);
+        const byId = new Map(records.map((r) => [r.resourceId, r]));
+        for (const resourceId of ids) {
+          const record = byId.get(resourceId);
+          const seoTitle = record?.generatedTitle ?? "";
+          const seoDescription = record?.generatedDescription ?? "";
+          if (!seoTitle || !seoDescription) {
+            await updateMetaStatus(shopId, resourceId, "failed", "Nothing to publish");
+            continue;
+          }
+          const result =
+            resourceType === "product"
+              ? await publishProductSeo(admin, resourceId, seoTitle, seoDescription)
+              : await publishArticleSeo(admin, resourceId, seoTitle, seoDescription);
+          if (result.success) {
+            await updateMetaStatus(shopId, resourceId, "published");
+            published++;
+          } else {
+            await updateMetaStatus(shopId, resourceId, "failed", result.error);
+          }
+        }
+        return published > 0
+          ? { success: true, intent }
+          : { success: false, intent, error: "Publish failed for all selected records" };
+      }
+      return { success: false, intent, error: "Redis not configured. Please add REDIS_URL to enable bulk publish processing." };
+    }
     return { success: true, intent };
   }
 
@@ -412,7 +320,7 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<ActionRes
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function MetaEditor() {
-  const { records, pageInfo, filter, resourceFilter, search, tone, pageMode, currentPage } =
+  const { records, pageInfo, filter, status, resourceFilter, search, tone, pageMode, currentPage } =
     useLoaderData<typeof loader>();
   const [searchParams, setSearchParams] = useSearchParams();
   const fetcher = useFetcher<ActionResult>();
@@ -515,7 +423,7 @@ export default function MetaEditor() {
           {/* Divider */}
           <div style={{ width: "1px", height: "22px", background: "var(--p-color-border)", flexShrink: 0, margin: "0 2px" }} />
 
-          {/* Status filter */}
+          {/* SEO-state filter: All / Missing Title / Missing Description / All Missing */}
           <div style={{ position: "relative", flexShrink: 0 }}>
             <select
               value={filter}
@@ -536,6 +444,40 @@ export default function MetaEditor() {
                 appearance: "none",
               } as React.CSSProperties}
             >
+              <option value="all">All</option>
+              <option value="missing_title">Missing Title</option>
+              <option value="missing_desc">Missing Description</option>
+              <option value="missing_both">Missing Both</option>
+            </select>
+            <svg style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "var(--p-color-icon)" }} width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M2 4.5l4 3.5 4-3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+
+          {/* Divider */}
+          <div style={{ width: "1px", height: "22px", background: "var(--p-color-border)", flexShrink: 0, margin: "0 2px" }} />
+
+          {/* Status filter */}
+          <div style={{ position: "relative", flexShrink: 0 }}>
+            <select
+              value={status}
+              onChange={(e) => updateParam("status", e.target.value)}
+              style={{
+                padding: "5px 28px 5px 10px",
+                border: `1px solid ${status !== "all" ? "var(--p-color-border-emphasis)" : "var(--p-color-border)"}`,
+                borderRadius: "8px",
+                background: status !== "all" ? "var(--p-color-bg-fill-info-secondary)" : "var(--p-color-bg-surface)",
+                color: "var(--p-color-text)",
+                fontSize: "13px",
+                fontWeight: "500",
+                cursor: "pointer",
+                outline: "none",
+                lineHeight: "20px",
+                minWidth: "135px",
+                WebkitAppearance: "none",
+                appearance: "none",
+              } as React.CSSProperties}
+            >
               <option value="all">All Statuses</option>
               <option value="pending">Pending</option>
               <option value="generated">Generated</option>
@@ -543,9 +485,6 @@ export default function MetaEditor() {
               <option value="rejected">Rejected</option>
               <option value="published">Published</option>
               <option value="failed">Failed</option>
-              {/* <option value="missing_title">Missing Title</option>
-              <option value="missing_desc">Missing Desc</option>
-              <option value="missing_both">Missing Both</option> */}
             </select>
             <svg style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "var(--p-color-icon)" }} width="12" height="12" viewBox="0 0 12 12" fill="none">
               <path d="M2 4.5l4 3.5 4-3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />

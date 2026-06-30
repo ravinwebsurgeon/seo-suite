@@ -1,221 +1,49 @@
-I need help debugging the Bulk Meta Generator / Editor module in my Shopify app.
+We are working on the Product Sales Intelligence module of our Shopify app (SEO Suite).
 
-## Issue Summary
+Currently the module fails with:
 
-The filtering functionality is returning incorrect results.
+"This app is not approved to access the Order object."
 
-### Status Filter Problems
+This happens because the app does not yet have Shopify Protected Customer Data (PCD) approval for the Order object.
 
-I have many products in the database whose status is clearly set to:
+Your task is NOT to bypass Shopify restrictions.
 
-* pending
-* generated
-* approved
-* rejected
-* published
+Instead, refactor the module to gracefully handle this situation.
 
-* Missing Title
-* Missing Description
-* Missing both
+Requirements:
 
-However, when I click certain status filters, the results are incorrect.
+1. Detect when the Shopify API denies access because of missing Protected Customer Data approval.
+
+2. Do NOT show a generic "Something went wrong" page.
+
+3. Instead, display a professional empty state explaining:
+
+- Product Sales Intelligence requires access to Shopify Orders.
+- The current app has not yet been granted permission.
+- Once Protected Customer Data access is approved, this module will automatically function.
+
+4. If the error is caused by another issue (network, GraphQL, server error, etc.), continue showing the normal error UI.
+
+5. Separate "Permission Error" from "Application Error".
+
+6. Refactor the backend so permission errors return a dedicated error code instead of a generic 500 response.
 
 Example:
 
-* There are multiple products with status = `pending`
-* When I select the **Pending** filter, the UI shows:
+{
+  success: false,
+  errorType: "PCD_PERMISSION_REQUIRED",
+  message: "...",
+}
 
-"No records found"
+7. Update the frontend to recognize this errorType and render the appropriate UI.
 
-"Try adjusting your filters or search query."
+8. Make sure the rest of the application continues working normally.
 
-The same problem occurs for other status filters as well. Some filters return incorrect counts or incorrect products.
+9. Review the implementation and identify exactly which GraphQL queries require Order access.
 
----
+10. Document which Shopify scopes and Protected Customer Data approvals are required for this module.
 
-### Missing SEO Filters Problems
+11. Ensure the code is production-ready so that once Shopify grants approval, no additional code changes are required.
 
-The following filters are also producing incorrect results:
-
-* Missing Title
-* Missing Description
-* Missing Both
-
-Examples:
-
-#### Missing Title
-
-Expected:
-Return products where SEO title is null, undefined, or empty.
-
-Actual:
-Products with existing titles are sometimes included, and products without titles are sometimes excluded.
-
-#### Missing Description
-
-Expected:
-Return products where meta description is null, undefined, or empty.
-
-Actual:
-Incorrect products are returned.
-
-#### Missing Both
-
-Expected:
-Return only products where BOTH title and description are missing.
-
-Actual:
-Results do not match the actual database values.
-
----
-
-## Investigation Required
-
-Please perform a full debugging investigation.
-
-### Check Frontend
-
-Inspect:
-
-* filter state management
-* selected filter value
-* URL search params
-* React state updates
-* filter tab click handlers
-* API request payloads
-
-Verify that the selected filter value is actually being sent correctly.
-
----
-
-### Check Backend
-
-Inspect:
-
-* route loaders
-* API endpoints
-* query builders
-* filtering functions
-* search + filter combination logic
-
-Verify that backend receives the expected filter values.
-
----
-
-### Check Database Queries
-
-I am using:
-
-* PostgreSQL
-* Drizzle ORM
-
-Please inspect all Drizzle queries used by the Bulk Meta Generator.
-
-Verify:
-
-* WHERE clauses
-* AND conditions
-* OR conditions
-* status comparisons
-* null handling
-* empty string handling
-
-Check for mistakes such as:
-
-status = 'Pending'
-vs
-status = 'pending'
-
-or
-
-NULL
-vs
-''
-
-or
-
-undefined values.
-
----
-
-### Verify Status Values
-
-Please determine:
-
-1. What status values are actually stored in the database.
-2. What status values the frontend expects.
-3. Whether there is a mismatch.
-
-For example:
-
-Database:
-
-pending
-
-Frontend filter:
-
-Pending
-
-or
-
-PENDING
-
-which would break exact matching.
-
----
-
-### Verify Missing SEO Logic
-
-Check how the code defines:
-
-* Missing Title
-* Missing Description
-* Missing Both
-
-Ensure it correctly handles:
-
-NULL
-
-''
-
-undefined
-
-whitespace-only strings
-
-For example:
-
-title IS NULL
-OR title = ''
-OR trim(title) = ''
-
-and similarly for descriptions.
-
----
-
-### Check Counts
-
-If filter tabs display counts, verify that:
-
-* count queries
-* table queries
-
-use the exact same filtering logic.
-
-A common bug is that tab counts are calculated differently from table results.
-
----
-
-### Deliverables
-
-Please provide:
-
-1. Root cause(s) of the incorrect filtering.
-2. Exact files involved.
-3. Exact code changes required.
-4. Correct Drizzle query implementation.
-5. Correct frontend filter implementation.
-6. Any database inconsistencies found.
-7. Any status value normalization required.
-8. Any test cases that should be added to prevent future regressions.
-
-Do not guess. Trace the filter value from UI → API → Drizzle query → Database results and identify where the mismatch occurs.
+Do not attempt to work around Shopify's Protected Customer Data restrictions. Instead, improve the user experience and architecture for this expected permission state.

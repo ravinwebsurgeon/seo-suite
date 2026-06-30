@@ -63,11 +63,14 @@ const ARTICLES_COUNT_QUERY = `#graphql
 // so we can't ask the API to count missing-SEO resources directly. Instead we
 // page through every resource fetching only `id` + `seo` and tally locally —
 // this reflects real, published SEO state immediately after an edit.
+// Includes title / handle / updatedAt (still lightweight) so a single full scan
+// can drive both the missing-SEO filters AND server-side title/handle search,
+// and hydrate the editor table without a second Shopify round-trip per page.
 const PRODUCTS_SEO_PAGE_QUERY = `#graphql
   query ProductsSeoPage($first: Int!, $after: String) {
     products(first: $first, after: $after) {
       pageInfo { hasNextPage endCursor }
-      edges { node { id seo { title description } } }
+      edges { node { id title handle seo { title description } updatedAt } }
     }
   }
 `;
@@ -76,7 +79,7 @@ const ARTICLES_SEO_PAGE_QUERY = `#graphql
   query ArticlesSeoPage($first: Int!, $after: String) {
     articles(first: $first, after: $after) {
       pageInfo { hasNextPage endCursor }
-      edges { node { id seo { title description } } }
+      edges { node { id title handle seo { title description } updatedAt } }
     }
   }
 `;
@@ -121,6 +124,23 @@ const ARTICLE_UPDATE_MUTATION = `#graphql
     }
   }
 `;
+
+const isDev = process.env.NODE_ENV !== "production";
+const debugLog = (...args: unknown[]) => {
+  if (isDev) console.log("[meta-publish]", ...args);
+};
+
+// The SEO payload Shopify confirms it stored, echoed back from the mutation.
+export interface PublishedSeo {
+  title: string | null;
+  description: string | null;
+}
+
+export interface PublishResult {
+  success: boolean;
+  error?: string;
+  seo?: PublishedSeo;
+}
 
 type AdminGraphQL = (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response>;
 
@@ -221,9 +241,12 @@ export interface SeoCompletenessStats {
   missingBoth: number;
 }
 
-// Treat null, "", and whitespace-only values as "missing" — mirrors the
-// editor's `!r.currentSeoTitle` filtering so the dashboard agrees with it.
-const isSeoEmpty = (value: string | null | undefined): boolean => !value || value.trim() === "";
+// Treat null, undefined, "", and whitespace-only values as "missing". This is
+// the single source of truth shared by the dashboard stats and the editor's
+// "Missing Title / Missing Description / All Missing" filters so they always
+// agree. Exported so the editor loader uses the exact same rule.
+export const isSeoEmpty = (value: string | null | undefined): boolean =>
+  !value || value.trim() === "";
 
 // Page size capped at 250 (Shopify's max for a connection). A safety cap on
 // total pages prevents runaway loops on very large catalogs; if hit, counts
@@ -257,13 +280,15 @@ async function computeSeoStats(
       stats.total += 1;
       const noTitle = isSeoEmpty(node.seo?.title);
       const noDesc = isSeoEmpty(node.seo?.description);
-      // Mutually-exclusive buckets, matching the editor's filters: a product
-      // missing both fields is counted ONLY in missingBoth. So `missingTitle` ==
-      // the editor's "Missing Title" filter (title empty, description present),
-      // `missingDescription` likewise, and they never double-count.
+      // INCLUSIVE buckets, matching the editor's filters exactly:
+      //   missingTitle       = SEO title empty (regardless of description)
+      //   missingDescription = meta description empty (regardless of title)
+      //   missingBoth        = both empty
+      // A resource missing both is counted in all three, so clicking the
+      // "Missing SEO Title" card maps 1:1 to the editor's "Missing Title" filter.
+      if (noTitle) stats.missingTitle += 1;
+      if (noDesc) stats.missingDescription += 1;
       if (noTitle && noDesc) stats.missingBoth += 1;
-      else if (noTitle) stats.missingTitle += 1;
-      else if (noDesc) stats.missingDescription += 1;
     }
 
     pages += 1;
@@ -277,10 +302,10 @@ async function computeSeoStats(
   return stats;
 }
 
-// Count products by SEO completeness. Buckets are mutually exclusive: a product
-// missing both fields counts only toward `missingBoth`, so `missingTitle` /
-// `missingDescription` / `missingBoth` never overlap and each card equals the
-// matching editor filter ("Missing Title" / "Missing Desc" / "Missing Both").
+// Count products by SEO completeness. Buckets are INCLUSIVE and overlapping:
+// a product missing both fields is counted under `missingTitle`,
+// `missingDescription` AND `missingBoth`, so each card equals the matching
+// editor filter ("Missing Title" / "Missing Desc" / "All Missing").
 export function computeProductSeoStats(admin: { graphql: AdminGraphQL }): Promise<SeoCompletenessStats> {
   return computeSeoStats(admin, PRODUCTS_SEO_PAGE_QUERY, "products");
 }
@@ -291,13 +316,25 @@ export function computeArticleSeoStats(admin: { graphql: AdminGraphQL }): Promis
 
 export type MissingSeoKind = "title" | "desc" | "both";
 
-// Page over the id+seo query, invoking `onNode` for every resource. Shared by
-// the missing-SEO and "all IDs" scans below. Honours the same page cap as the
-// dashboard stats. Returns true if the cap was hit (results are partial).
+// A lightweight resource node: everything the editor table needs for display
+// plus the SEO fields the filters key on. Produced by a single catalog scan so
+// missing-SEO filtering, title/handle search, and table hydration all run off
+// one pass with no per-page Shopify re-fetch.
+export interface SeoLiteNode {
+  id: string;
+  title: string;
+  handle: string;
+  seo: { title: string | null; description: string | null };
+  updatedAt: string;
+}
+
+// Page over the lightweight scan query, invoking `onNode` for every resource.
+// Shared by the missing-SEO and "all IDs" scans below. Honours the same page
+// cap as the dashboard stats. Returns true if the cap was hit (results partial).
 async function scanSeoPages(
   admin: { graphql: AdminGraphQL },
   resourceType: "product" | "article",
-  onNode: (node: { id: string; seo: { title: string | null; description: string | null } }) => void,
+  onNode: (node: SeoLiteNode) => void,
 ): Promise<boolean> {
   const isArticles = resourceType === "article";
   const query = isArticles ? ARTICLES_SEO_PAGE_QUERY : PRODUCTS_SEO_PAGE_QUERY;
@@ -310,7 +347,7 @@ async function scanSeoPages(
     const json = await response.json() as {
       data?: Record<string, {
         pageInfo: { hasNextPage: boolean; endCursor: string | null };
-        edges: Array<{ node: { id: string; seo: { title: string | null; description: string | null } } }>;
+        edges: Array<{ node: SeoLiteNode }>;
       }>;
     };
     const conn = json.data?.[rootKey];
@@ -329,48 +366,38 @@ async function scanSeoPages(
   return false;
 }
 
-// Scan the whole catalog and return the GIDs whose SEO is missing per `kind`.
-// Buckets are MUTUALLY EXCLUSIVE so each product appears under exactly one
-// filter:
-//   - "title" → SEO title empty but description present
-//   - "desc"  → description empty but SEO title present
+// Whether a lite node matches a missing-SEO filter. INCLUSIVE semantics:
+//   - "title" → SEO title empty (regardless of description)
+//   - "desc"  → meta description empty (regardless of SEO title)
 //   - "both"  → both empty
-// A product missing both fields belongs to "both" only — it is NOT listed under
-// "title" or "desc". Uses the same `isSeoEmpty` rule (null / "" / whitespace) as
-// the dashboard. Shopify search can't filter on empty SEO fields, so a full scan
-// is the only correct approach.
-export async function fetchResourceIdsMissingSeo(
-  admin: { graphql: AdminGraphQL },
-  resourceType: "product" | "article",
-  kind: MissingSeoKind,
-): Promise<string[]> {
-  const ids: string[] = [];
-  await scanSeoPages(admin, resourceType, (node) => {
-    const noTitle = isSeoEmpty(node.seo?.title);
-    const noDesc = isSeoEmpty(node.seo?.description);
-    const match =
-      kind === "both"
-        ? noTitle && noDesc
-        : kind === "title"
-          ? noTitle && !noDesc
-          : !noTitle && noDesc;
-    if (match) ids.push(node.id);
-  });
-  return ids;
+// A resource missing both fields therefore matches "title", "desc" AND "both".
+// Uses the same `isSeoEmpty` rule (null / undefined / "" / whitespace) as the
+// dashboard, so counts and rows always agree.
+export function matchesMissingSeo(node: SeoLiteNode, kind: MissingSeoKind): boolean {
+  const noTitle = isSeoEmpty(node.seo?.title);
+  const noDesc = isSeoEmpty(node.seo?.description);
+  if (kind === "both") return noTitle && noDesc;
+  if (kind === "title") return noTitle;
+  return noDesc;
 }
 
-// Scan the whole catalog and return every resource GID, in Shopify's default
-// order. Used to resolve the "Pending" filter (= resources not in any acted
-// status), which can't come from the DB alone because untracked resources have
-// no row yet.
-export async function fetchAllResourceIds(
+// Scan the whole catalog once and return every resource as a lite node, in
+// Shopify's default order. The editor loader runs all of its ID-driven filters
+// (missing-SEO, pending, status, search) off this single list. Shopify search
+// can't filter on empty SEO fields, so a full scan is the only correct approach.
+export async function scanAllSeoNodes(
   admin: { graphql: AdminGraphQL },
   resourceType: "product" | "article",
-): Promise<string[]> {
-  const ids: string[] = [];
-  await scanSeoPages(admin, resourceType, (node) => ids.push(node.id));
-  return ids;
+): Promise<SeoLiteNode[]> {
+  const nodes: SeoLiteNode[] = [];
+  await scanSeoPages(admin, resourceType, (node) => nodes.push(node));
+  return nodes;
 }
+
+// Shopify connections cap `first` at 250 and an over-long `id:.. OR ..` query
+// string can be rejected, so by-id fetches are chunked. The old single-query
+// form silently truncated / failed once the set grew past one page.
+const BY_ID_CHUNK = 100;
 
 // Fetch specific products by their GIDs using the id: filter query.
 // Uses the same products query as the "all" path — avoids the nodes query
@@ -380,10 +407,15 @@ export async function fetchProductsByIds(
   gids: string[],
 ): Promise<ShopifyProduct[]> {
   if (gids.length === 0) return [];
-  const numericIds = gids.map((g) => g.split("/").pop()).filter(Boolean) as string[];
-  const query = numericIds.map((id) => `id:${id}`).join(" OR ");
-  const { products } = await fetchProducts(admin, { first: gids.length, query });
-  return products;
+  const out: ShopifyProduct[] = [];
+  for (let i = 0; i < gids.length; i += BY_ID_CHUNK) {
+    const chunk = gids.slice(i, i + BY_ID_CHUNK);
+    const numericIds = chunk.map((g) => g.split("/").pop()).filter(Boolean) as string[];
+    const query = numericIds.map((id) => `id:${id}`).join(" OR ");
+    const { products } = await fetchProducts(admin, { first: chunk.length, query });
+    out.push(...products);
+  }
+  return out;
 }
 
 // Fetch specific articles by their GIDs using the id: filter query.
@@ -392,10 +424,42 @@ export async function fetchArticlesByIds(
   gids: string[],
 ): Promise<ShopifyArticle[]> {
   if (gids.length === 0) return [];
-  const numericIds = gids.map((g) => g.split("/").pop()).filter(Boolean) as string[];
-  const query = numericIds.map((id) => `id:${id}`).join(" OR ");
-  const { articles } = await fetchArticles(admin, { first: gids.length, query });
-  return articles;
+  const out: ShopifyArticle[] = [];
+  for (let i = 0; i < gids.length; i += BY_ID_CHUNK) {
+    const chunk = gids.slice(i, i + BY_ID_CHUNK);
+    const numericIds = chunk.map((g) => g.split("/").pop()).filter(Boolean) as string[];
+    const query = numericIds.map((id) => `id:${id}`).join(" OR ");
+    const { articles } = await fetchArticles(admin, { first: chunk.length, query });
+    out.push(...articles);
+  }
+  return out;
+}
+
+// Resolve a list of handles to their Shopify GIDs (and current SEO) by querying
+// `handle:` in chunks. Returns a Map keyed by handle. Used by CSV import to
+// match rows to real products/articles — handles that don't resolve are caught
+// by the caller and reported as skipped. Never touches Shopify SEO values.
+export async function fetchResourcesByHandles(
+  admin: { graphql: AdminGraphQL },
+  resourceType: "product" | "article",
+  handles: string[],
+): Promise<Map<string, { id: string; title: string; handle: string }>> {
+  const result = new Map<string, { id: string; title: string; handle: string }>();
+  const unique = [...new Set(handles.filter(Boolean))];
+  const CHUNK = 25; // keep the OR query string well within limits
+  const isArticles = resourceType === "article";
+
+  for (let i = 0; i < unique.length; i += CHUNK) {
+    const chunk = unique.slice(i, i + CHUNK);
+    const query = chunk.map((h) => `handle:${JSON.stringify(h)}`).join(" OR ");
+    const items = isArticles
+      ? (await fetchArticles(admin, { first: chunk.length, query })).articles
+      : (await fetchProducts(admin, { first: chunk.length, query })).products;
+    for (const item of items) {
+      result.set(item.handle, { id: item.id, title: item.title, handle: item.handle });
+    }
+  }
+  return result;
 }
 
 type FetchedNode = {
@@ -433,12 +497,69 @@ export async function fetchNodesByIds(
   );
 }
 
+// Shared response handler for both SEO update mutations. Surfaces problems at
+// EVERY layer so nothing is silently swallowed and we never report success on a
+// write Shopify didn't actually make:
+//   1. transport (non-2xx HTTP)            → error
+//   2. top-level GraphQL `errors`          → error  (was previously a crash)
+//   3. mutation `userErrors`               → error
+//   4. missing/echoed-back resource        → error
+// On success it returns the SEO Shopify echoed back, so the caller can confirm
+// the stored values match what was sent.
+async function handleSeoMutation(
+  response: Response,
+  mutationKey: "productUpdate" | "articleUpdate",
+  resourceKey: "product" | "article",
+  sent: { title: string; description: string },
+): Promise<PublishResult> {
+  if (!response.ok) {
+    return { success: false, error: `Shopify HTTP ${response.status}` };
+  }
+
+  const json = (await response.json()) as {
+    data?: Record<string, {
+      userErrors?: Array<{ field: string[] | null; message: string }>;
+      product?: { id: string; seo: PublishedSeo } | null;
+      article?: { id: string; seo: PublishedSeo } | null;
+    }>;
+    errors?: Array<{ message: string }>;
+  };
+
+  if (json.errors?.length) {
+    const msg = json.errors.map((e) => e.message).join(", ");
+    debugLog(`${mutationKey} top-level errors:`, msg);
+    return { success: false, error: msg };
+  }
+
+  const payload = json.data?.[mutationKey];
+  if (!payload) {
+    debugLog(`${mutationKey} returned no payload`);
+    return { success: false, error: "Shopify returned no response payload" };
+  }
+
+  const userErrors = payload.userErrors ?? [];
+  if (userErrors.length > 0) {
+    const msg = userErrors.map((e) => e.message).join(", ");
+    debugLog(`${mutationKey} userErrors:`, msg);
+    return { success: false, error: msg };
+  }
+
+  const resource = payload[resourceKey];
+  if (!resource) {
+    return { success: false, error: "Shopify did not return the updated resource" };
+  }
+
+  debugLog(`${mutationKey} ok`, resource.id, { sent, stored: resource.seo });
+  return { success: true, seo: resource.seo };
+}
+
 export async function publishProductSeo(
   admin: { graphql: AdminGraphQL },
   productId: string,
   seoTitle: string,
   seoDescription: string,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<PublishResult> {
+  debugLog("productUpdate →", productId, { seoTitle, seoDescription });
   const response = await admin.graphql(PRODUCT_UPDATE_MUTATION, {
     variables: {
       input: {
@@ -447,19 +568,10 @@ export async function publishProductSeo(
       },
     },
   });
-  const json = await response.json() as {
-    data: {
-      productUpdate: {
-        userErrors: Array<{ field: string[]; message: string }>;
-      };
-    };
-  };
-
-  const errors = json.data.productUpdate.userErrors;
-  if (errors.length > 0) {
-    return { success: false, error: errors.map((e) => e.message).join(", ") };
-  }
-  return { success: true };
+  return handleSeoMutation(response, "productUpdate", "product", {
+    title: seoTitle,
+    description: seoDescription,
+  });
 }
 
 export async function publishArticleSeo(
@@ -467,24 +579,16 @@ export async function publishArticleSeo(
   articleId: string,
   seoTitle: string,
   seoDescription: string,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<PublishResult> {
+  debugLog("articleUpdate →", articleId, { seoTitle, seoDescription });
   const response = await admin.graphql(ARTICLE_UPDATE_MUTATION, {
     variables: {
       id: articleId,
       article: { seo: { title: seoTitle, description: seoDescription } },
     },
   });
-  const json = await response.json() as {
-    data: {
-      articleUpdate: {
-        userErrors: Array<{ field: string[]; message: string }>;
-      };
-    };
-  };
-
-  const errors = json.data.articleUpdate.userErrors;
-  if (errors.length > 0) {
-    return { success: false, error: errors.map((e) => e.message).join(", ") };
-  }
-  return { success: true };
+  return handleSeoMutation(response, "articleUpdate", "article", {
+    title: seoTitle,
+    description: seoDescription,
+  });
 }

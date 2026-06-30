@@ -4,20 +4,55 @@ import type { CsvImportRow, CsvImportValidation } from "../../types/meta-generat
 
 type ValidTone = "auto" | "critical" | "neutral" | "info" | "success" | "caution" | "warning";
 
+// RFC-4180-ish tokenizer: handles quoted fields, commas and newlines inside
+// quotes, and escaped quotes (""). Returns an array of records (each a string[]).
+function tokenizeCsv(text: string): string[][] {
+  const records: string[][] = [];
+  let field = "";
+  let record: string[] = [];
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      record.push(field); field = "";
+    } else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      record.push(field); field = "";
+      // Skip blank lines.
+      if (record.length > 1 || record[0] !== "") records.push(record);
+      record = [];
+    } else {
+      field += ch;
+    }
+  }
+  if (field !== "" || record.length > 0) {
+    record.push(field);
+    if (record.length > 1 || record[0] !== "") records.push(record);
+  }
+  return records;
+}
+
 function parseCsv(text: string): { rows: CsvImportRow[]; errors: string[] } {
-  const lines = text.trim().split("\n");
   const errors: string[] = [];
   const rows: CsvImportRow[] = [];
+  const records = tokenizeCsv(text.trim());
 
-  if (lines.length < 2) {
+  if (records.length < 2) {
     errors.push("CSV must have a header row and at least one data row");
     return { rows, errors };
   }
 
-  const header = lines[0]
-    .toLowerCase()
-    .split(",")
-    .map((h) => h.trim().replace(/"/g, ""));
+  const header = records[0].map((h) => h.trim().toLowerCase());
   const handleIdx = header.indexOf("handle");
   const titleIdx = header.indexOf("title_tag");
   const descIdx = header.indexOf("meta_description");
@@ -29,19 +64,20 @@ function parseCsv(text: string): { rows: CsvImportRow[]; errors: string[] } {
   }
 
   const seen = new Set<string>();
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
-    const handle = cols[handleIdx];
-    const titleTag = cols[titleIdx] ?? "";
-    const metaDesc = cols[descIdx] ?? "";
-    const type = typeIdx !== -1 ? cols[typeIdx] : "product";
+  for (let i = 1; i < records.length; i++) {
+    const cols = records[i];
+    const handle = (cols[handleIdx] ?? "").trim();
+    const titleTag = (cols[titleIdx] ?? "").trim();
+    const metaDesc = (cols[descIdx] ?? "").trim();
+    const type = typeIdx !== -1 ? (cols[typeIdx] ?? "").trim() : "product";
 
     if (!handle) {
       errors.push(`Row ${i + 1}: missing handle`);
       continue;
     }
     if (seen.has(handle)) {
-      errors.push(`Row ${i + 1}: duplicate handle "${handle}"`);
+      // Skip duplicate handles within the file (Step 8).
+      errors.push(`Row ${i + 1}: duplicate handle "${handle}" (skipped)`);
       continue;
     }
     seen.add(handle);
@@ -49,7 +85,7 @@ function parseCsv(text: string): { rows: CsvImportRow[]; errors: string[] } {
       handle,
       title_tag: titleTag,
       meta_description: metaDesc,
-      type: (type as "product" | "article") ?? "product",
+      type: type === "article" ? "article" : "product",
     });
   }
   return { rows, errors };
@@ -92,6 +128,8 @@ interface ImportExportProps {
     intent?: string;
     error?: string;
     importedCount?: number;
+    skippedCount?: number;
+    invalidCount?: number;
     failedRows?: Array<{ row: number; handle: string; message: string }>;
   }>;
 }
@@ -366,12 +404,21 @@ export function ImportExport({
             {fetcher.data.success ? (
               <s-stack direction="block" gap="small-100">
                 <s-paragraph>
-                  Imported {fetcher.data.importedCount} rows successfully.
+                  {fetcher.data.importedCount} imported
+                  {(fetcher.data.skippedCount ?? 0) > 0 ? `, ${fetcher.data.skippedCount} skipped` : ""}
+                  {(fetcher.data.invalidCount ?? 0) > 0 ? `, ${fetcher.data.invalidCount} invalid` : ""}.
                 </s-paragraph>
                 {(fetcher.data.failedRows?.length ?? 0) > 0 && (
-                  <s-paragraph>
-                    {fetcher.data.failedRows?.length} rows failed.
-                  </s-paragraph>
+                  <s-stack direction="block" gap="small-100">
+                    {fetcher.data.failedRows?.slice(0, 10).map((f, i) => (
+                      <s-paragraph key={i}>
+                        Row {f.row} ({f.handle}): {f.message}
+                      </s-paragraph>
+                    ))}
+                    {(fetcher.data.failedRows?.length ?? 0) > 10 && (
+                      <s-paragraph>…and {(fetcher.data.failedRows?.length ?? 0) - 10} more</s-paragraph>
+                    )}
+                  </s-stack>
                 )}
               </s-stack>
             ) : (

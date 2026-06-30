@@ -8,6 +8,7 @@ import {
   serial,
   text,
   timestamp,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 export const sessions = pgTable("Session", {
@@ -33,31 +34,43 @@ export const sessions = pgTable("Session", {
 export type SessionRecord = typeof sessions.$inferSelect;
 export type NewSessionRecord = typeof sessions.$inferInsert;
 
-export const seoKeywords = pgTable("seo_keywords", {
-  id: serial("id").primaryKey(),
-  shopId: text("shop_id").notNull(),
-  resourceId: text("resource_id").notNull(),
-  resourceType: text("resource_type").notNull(),
-  keyword: text("keyword").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
+export const seoKeywords = pgTable(
+  "seo_keywords",
+  {
+    id: serial("id").primaryKey(),
+    shopId: text("shop_id").notNull(),
+    resourceId: text("resource_id").notNull(),
+    resourceType: text("resource_type").notNull(),
+    keyword: text("keyword").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  // One keyword row per resource per shop — backs the keyword upsert and
+  // prevents duplicate rows.
+  (t) => [uniqueIndex("seo_keywords_shop_resource_idx").on(t.shopId, t.resourceId)],
+);
 
-export const seoMetaGenerations = pgTable("seo_meta_generations", {
-  id: serial("id").primaryKey(),
-  shopId: text("shop_id").notNull(),
-  resourceId: text("resource_id").notNull(),
-  resourceType: text("resource_type").notNull(),
-  currentTitle: text("current_title"),
-  currentDescription: text("current_description"),
-  generatedTitle: text("generated_title"),
-  generatedDescription: text("generated_description"),
-  tone: text("tone").default("professional"),
-  status: text("status").notNull().default("pending"),
-  errorMessage: text("error_message"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
+export const seoMetaGenerations = pgTable(
+  "seo_meta_generations",
+  {
+    id: serial("id").primaryKey(),
+    shopId: text("shop_id").notNull(),
+    resourceId: text("resource_id").notNull(),
+    resourceType: text("resource_type").notNull(),
+    currentTitle: text("current_title"),
+    currentDescription: text("current_description"),
+    generatedTitle: text("generated_title"),
+    generatedDescription: text("generated_description"),
+    tone: text("tone").default("professional"),
+    status: text("status").notNull().default("pending"),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  // One meta-generation row per resource per shop — backs the meta upsert and
+  // prevents duplicate rows.
+  (t) => [uniqueIndex("seo_meta_generations_shop_resource_idx").on(t.shopId, t.resourceId)],
+);
 
 export const seoGenerationJobs = pgTable("seo_generation_jobs", {
   id: serial("id").primaryKey(),

@@ -51,24 +51,16 @@ export async function upsertKeyword(
   resourceType: ResourceType,
   keyword: string,
 ): Promise<void> {
+  // Atomic upsert keyed by the (shop_id, resource_id) unique index. Avoids the
+  // duplicate rows the previous insert-then-find approach produced when no
+  // unique constraint existed.
   await db
     .insert(seoKeywords)
     .values({ shopId, resourceId, resourceType, keyword, updatedAt: new Date() })
-    .onConflictDoNothing();
-
-  const existing = await db.query.seoKeywords.findFirst({
-    where: and(
-      eq(seoKeywords.shopId, shopId),
-      eq(seoKeywords.resourceId, resourceId),
-    ),
-  });
-
-  if (existing) {
-    await db
-      .update(seoKeywords)
-      .set({ keyword, updatedAt: new Date() })
-      .where(eq(seoKeywords.id, existing.id));
-  }
+    .onConflictDoUpdate({
+      target: [seoKeywords.shopId, seoKeywords.resourceId],
+      set: { keyword, updatedAt: new Date() },
+    });
 }
 
 // ─── Meta Generations ─────────────────────────────────────────────────────────
@@ -113,41 +105,38 @@ export async function upsertMetaRecord(params: {
   status?: MetaStatus;
   errorMessage?: string | null;
 }) {
-  const existing = await getMetaRecord(params.shopId, params.resourceId);
+  // Atomic upsert keyed by the (shop_id, resource_id) unique index. Only the
+  // fields actually supplied are overwritten on conflict, so a partial save
+  // (e.g. editing just the generated title) never clobbers other columns.
+  const set: Record<string, unknown> = { updatedAt: new Date() };
+  if (params.currentTitle !== undefined) set.currentTitle = params.currentTitle;
+  if (params.currentDescription !== undefined) set.currentDescription = params.currentDescription;
+  if (params.generatedTitle !== undefined) set.generatedTitle = params.generatedTitle;
+  if (params.generatedDescription !== undefined) set.generatedDescription = params.generatedDescription;
+  if (params.tone !== undefined) set.tone = params.tone;
+  if (params.status !== undefined) set.status = params.status;
+  if (params.errorMessage !== undefined) set.errorMessage = params.errorMessage;
 
-  if (existing) {
-    await db
-      .update(seoMetaGenerations)
-      .set({
-        ...(params.currentTitle !== undefined && { currentTitle: params.currentTitle }),
-        ...(params.currentDescription !== undefined && { currentDescription: params.currentDescription }),
-        ...(params.generatedTitle !== undefined && { generatedTitle: params.generatedTitle }),
-        ...(params.generatedDescription !== undefined && { generatedDescription: params.generatedDescription }),
-        ...(params.tone !== undefined && { tone: params.tone }),
-        ...(params.status !== undefined && { status: params.status }),
-        ...(params.errorMessage !== undefined && { errorMessage: params.errorMessage }),
-        updatedAt: new Date(),
-      })
-      .where(eq(seoMetaGenerations.id, existing.id));
-    return existing.id;
-  } else {
-    const [inserted] = await db
-      .insert(seoMetaGenerations)
-      .values({
-        shopId: params.shopId,
-        resourceId: params.resourceId,
-        resourceType: params.resourceType,
-        currentTitle: params.currentTitle ?? null,
-        currentDescription: params.currentDescription ?? null,
-        generatedTitle: params.generatedTitle ?? null,
-        generatedDescription: params.generatedDescription ?? null,
-        tone: params.tone ?? "professional",
-        status: params.status ?? "pending",
-        errorMessage: params.errorMessage ?? null,
-      })
-      .returning({ id: seoMetaGenerations.id });
-    return inserted.id;
-  }
+  const [row] = await db
+    .insert(seoMetaGenerations)
+    .values({
+      shopId: params.shopId,
+      resourceId: params.resourceId,
+      resourceType: params.resourceType,
+      currentTitle: params.currentTitle ?? null,
+      currentDescription: params.currentDescription ?? null,
+      generatedTitle: params.generatedTitle ?? null,
+      generatedDescription: params.generatedDescription ?? null,
+      tone: params.tone ?? "professional",
+      status: params.status ?? "pending",
+      errorMessage: params.errorMessage ?? null,
+    })
+    .onConflictDoUpdate({
+      target: [seoMetaGenerations.shopId, seoMetaGenerations.resourceId],
+      set,
+    })
+    .returning({ id: seoMetaGenerations.id });
+  return row.id;
 }
 
 export async function updateMetaStatus(
