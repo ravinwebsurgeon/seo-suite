@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useFetcher } from "react-router";
 import type { HighDemandRow, HighDemandSortKey, SortDir } from "../../types/product-sales";
+import { highDemandToCsv, downloadCsv } from "../../services/product-sales/csv";
 
 const PAGE_SIZE = 25;
 
@@ -88,10 +89,12 @@ export function HighDemandTable({ rows, cachedAt }: Props) {
               Refresh
             </s-button>
           </fetcher.Form>
-          <fetcher.Form method="post">
-            <input type="hidden" name="_intent" value="export_csv" />
-            <s-button variant="secondary" type="submit">Export CSV</s-button>
-          </fetcher.Form>
+          <s-button
+            variant="secondary"
+            onClick={() => downloadCsv(`high-demand-${new Date().toISOString().slice(0, 10)}.csv`, highDemandToCsv(sorted))}
+          >
+            Export CSV
+          </s-button>
         </div>
       </s-stack>
 

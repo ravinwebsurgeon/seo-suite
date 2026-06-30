@@ -1,8 +1,40 @@
 import type { LineItemAgg, ShopifyProduct } from "../../types/product-sales";
+import { PCDPermissionError } from "../../types/product-sales";
 
 type AdminClient = {
   graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response>;
 };
+
+// ─── PCD permission detection ────────────────────────────────────────────────
+
+/**
+ * Returns true when Shopify's GraphQL response indicates the app lacks
+ * Protected Customer Data (PCD) approval for the Order object.
+ *
+ * Shopify returns an ACCESS_DENIED extension code and a message containing
+ * "not approved to access" or "protected customer data" for these errors.
+ */
+function isPcdError(errors: { message: string; extensions?: { code?: string } }[]): boolean {
+  return errors.some(
+    (e) =>
+      e.extensions?.code === "ACCESS_DENIED" ||
+      e.extensions?.code === "UNAUTHORIZED" ||
+      /not approved to access/i.test(e.message) ||
+      /protected customer data/i.test(e.message) ||
+      /order object/i.test(e.message),
+  );
+}
+
+/**
+ * Shopify sometimes returns a 403 HTTP response with no JSON body, or a JSON
+ * body with no `errors` array, when PCD access is denied. This helper checks
+ * the raw Response status so we never miss it.
+ */
+async function checkResponseForPcdDenial(response: Response): Promise<void> {
+  if (response.status === 403) {
+    throw new PCDPermissionError();
+  }
+}
 
 // ─── GraphQL queries ──────────────────────────────────────────────────────────
 
@@ -119,6 +151,22 @@ export async function fetchOrderAggregations(
   startDate: string,
   endDate: string,
 ): Promise<{ aggregations: LineItemAgg[]; totalOrders: number; totalRevenue: number }> {
+  try {
+    return await _fetchOrderAggregations(admin, startDate, endDate);
+  } catch (err) {
+    // Re-wrap plain Errors thrown by the Shopify SDK itself (before we see the response)
+    if (!(err instanceof PCDPermissionError) && PCDPermissionError.messageMatches(err)) {
+      throw new PCDPermissionError((err as Error).message);
+    }
+    throw err;
+  }
+}
+
+async function _fetchOrderAggregations(
+  admin: AdminClient,
+  startDate: string,
+  endDate: string,
+): Promise<{ aggregations: LineItemAgg[]; totalOrders: number; totalRevenue: number }> {
   const query = `created_at:>='${startDate}T00:00:00Z' created_at:<='${endDate}T23:59:59Z' financial_status:paid`;
   const aggMap = new Map<string, LineItemAgg>();
   let totalOrders = 0;
@@ -130,9 +178,18 @@ export async function fetchOrderAggregations(
     const response = await admin.graphql(ORDERS_QUERY, {
       variables: { first: 250, after: cursor, query },
     });
-    const json = (await response.json()) as OrdersPage & { errors?: { message: string }[] };
+
+    // Catch HTTP-level 403 before attempting JSON parse
+    await checkResponseForPcdDenial(response.clone());
+
+    const json = (await response.json()) as OrdersPage & { errors?: { message: string; extensions?: { code?: string } }[] };
     if (!json.data?.orders) {
-      const msg = json.errors?.map((e) => e.message).join("; ") ?? "Unknown GraphQL error";
+      const errors = json.errors ?? [];
+      if (isPcdError(errors)) {
+        console.warn("[product-sales] PCD permission denied by Shopify:", errors);
+        throw new PCDPermissionError();
+      }
+      const msg = errors.map((e) => e.message).join("; ") || "Unknown GraphQL error";
       throw new Error(`Failed to fetch orders: ${msg}`);
     }
     const page = json.data.orders;

@@ -96,3 +96,53 @@ export interface ReportResult {
   highDemand: HighDemandRow[];
   cachedAt: string;
 }
+
+// ─── Permission error ─────────────────────────────────────────────────────────
+
+/**
+ * Returned by loaders when Shopify denies access due to missing
+ * Protected Customer Data (PCD) approval for the Order object.
+ */
+export interface PcdPermissionError {
+  success: false;
+  errorType: "PCD_PERMISSION_REQUIRED";
+  message: string;
+}
+
+/**
+ * Thrown by service layer functions when Shopify returns a PCD access-denied
+ * error. Caught in route loaders and converted to a PcdPermissionError response
+ * so the UI can render the appropriate empty state instead of crashing.
+ */
+export class PCDPermissionError extends Error {
+  readonly errorType = "PCD_PERMISSION_REQUIRED" as const;
+  constructor(message = "This app is not approved to access the Order object.") {
+    super(message);
+    this.name = "PCDPermissionError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+
+  static is(err: unknown): err is PCDPermissionError {
+    return (
+      err instanceof PCDPermissionError ||
+      (err instanceof Error && err.name === "PCDPermissionError") ||
+      (typeof err === "object" && err !== null && (err as { errorType?: string }).errorType === "PCD_PERMISSION_REQUIRED") ||
+      PCDPermissionError.messageMatches(err)
+    );
+  }
+
+  /**
+   * Checks if an unknown thrown value contains Shopify's known PCD error message.
+   * The Shopify SDK throws a plain Error with this exact text before our code
+   * can inspect the response, so we must catch it by message.
+   */
+  static messageMatches(err: unknown): boolean {
+    if (typeof err !== "object" || err === null) return false;
+    const msg: string = (err as { message?: string }).message ?? "";
+    return (
+      /not approved to access the order object/i.test(msg) ||
+      /protected customer data/i.test(msg) ||
+      /protected_customer_data/i.test(msg)
+    );
+  }
+}

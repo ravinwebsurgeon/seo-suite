@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useFetcher } from "react-router";
 import type { BestSellerRow, BestSellerSortKey, SortDir } from "../../types/product-sales";
+import { bestSellersToCsv, downloadCsv } from "../../services/product-sales/csv";
 
 const PAGE_SIZE = 25;
 
@@ -83,11 +84,12 @@ export function BestSellersTable({ rows, dateRange, cachedAt }: Props) {
               Refresh
             </s-button>
           </fetcher.Form>
-          <fetcher.Form method="post">
-            <input type="hidden" name="_intent" value="export_csv" />
-            <input type="hidden" name="dateRange" value={dateRange} />
-            <s-button variant="secondary" type="submit">Export CSV</s-button>
-          </fetcher.Form>
+          <s-button
+            variant="secondary"
+            onClick={() => downloadCsv(`best-sellers-${dateRange}.csv`, bestSellersToCsv(sorted))}
+          >
+            Export CSV
+          </s-button>
         </div>
       </s-stack>
 

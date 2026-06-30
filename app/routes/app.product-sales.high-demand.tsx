@@ -2,8 +2,11 @@ import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "re
 import { useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
-import { loadHighDemand, highDemandToCsv } from "../services/product-sales/reports.server";
+import { loadHighDemand } from "../services/product-sales/reports.server";
 import { HighDemandTable } from "../components/product-sales/HighDemandTable";
+import { PcdPermissionEmptyState } from "../components/product-sales/PcdPermissionEmptyState";
+import { PCDPermissionError } from "../types/product-sales";
+import type { HighDemandRow, PcdPermissionError } from "../types/product-sales";
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
@@ -11,9 +14,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const shopId = session.shop;
 
-  const { rows, cachedAt } = await loadHighDemand(admin, shopId);
-
-  return { rows, cachedAt };
+  try {
+    const { rows, cachedAt } = await loadHighDemand(admin, shopId);
+    return { rows, cachedAt, pcdError: null as PcdPermissionError | null };
+  } catch (err) {
+    if (PCDPermissionError.is(err)) {
+      return {
+        rows: null as HighDemandRow[] | null,
+        cachedAt: null as string | null,
+        pcdError: {
+          success: false,
+          errorType: "PCD_PERMISSION_REQUIRED",
+          message: err instanceof Error ? err.message : "Order access not approved.",
+        } satisfies PcdPermissionError,
+      };
+    }
+    throw err;
+  }
 };
 
 // ─── Action ───────────────────────────────────────────────────────────────────
@@ -25,19 +42,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = formData.get("_intent") as string;
 
   if (intent === "refresh") {
-    await loadHighDemand(admin, shopId, true);
+    try {
+      await loadHighDemand(admin, shopId, true);
+    } catch (err) {
+      if (PCDPermissionError.is(err)) {
+        return { success: false, errorType: "PCD_PERMISSION_REQUIRED", message: err instanceof Error ? err.message : "Order access not approved." } satisfies PcdPermissionError;
+      }
+      throw err;
+    }
     return null;
-  }
-
-  if (intent === "export_csv") {
-    const { rows } = await loadHighDemand(admin, shopId);
-    const csv = highDemandToCsv(rows);
-    return new Response(csv, {
-      headers: {
-        "Content-Type": "text/csv",
-        "Content-Disposition": `attachment; filename="high-demand-${new Date().toISOString().slice(0, 10)}.csv"`,
-      },
-    });
   }
 
   return null;
@@ -46,7 +59,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function HighDemandRoute() {
-  const { rows, cachedAt } = useLoaderData<typeof loader>();
+  const { rows, cachedAt, pcdError } = useLoaderData<typeof loader>();
+
+  if (pcdError) {
+    return <PcdPermissionEmptyState />;
+  }
+
+  if (!rows || !cachedAt) return null;
 
   return (
     <s-stack direction="block" gap="base">

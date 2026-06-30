@@ -1,11 +1,13 @@
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { useLoaderData } from "react-router";
+import { Link, useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
-import { loadBestSellers, getDateRange, bestSellersToCsv } from "../services/product-sales/reports.server";
+import { loadBestSellers, getDateRange } from "../services/product-sales/reports.server";
 import { buildDateRangeKey } from "../services/product-sales/cache.server";
 import { BestSellersTable } from "../components/product-sales/BestSellersTable";
-import type { DatePreset } from "../types/product-sales";
+import { PcdPermissionEmptyState } from "../components/product-sales/PcdPermissionEmptyState";
+import { PCDPermissionError } from "../types/product-sales";
+import type { DatePreset, BestSellerRow, PcdPermissionError } from "../types/product-sales";
 
 const PRESETS: { value: DatePreset; label: string }[] = [
   { value: "7d", label: "Last 7 Days" },
@@ -26,9 +28,26 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const dateRange = getDateRange(preset, customStart, customEnd);
   const rangeKey = buildDateRangeKey(dateRange.startDate, dateRange.endDate);
 
-  const { rows, cachedAt } = await loadBestSellers(admin, shopId, dateRange);
-
-  return { rows, cachedAt, dateRange, rangeKey, preset };
+  try {
+    const { rows, cachedAt } = await loadBestSellers(admin, shopId, dateRange);
+    return { rows, cachedAt, dateRange, rangeKey, preset, pcdError: null as PcdPermissionError | null };
+  } catch (err) {
+    if (PCDPermissionError.is(err)) {
+      return {
+        rows: null as BestSellerRow[] | null,
+        cachedAt: null as string | null,
+        dateRange,
+        rangeKey,
+        preset,
+        pcdError: {
+          success: false,
+          errorType: "PCD_PERMISSION_REQUIRED",
+          message: err instanceof Error ? err.message : "Order access not approved.",
+        } satisfies PcdPermissionError,
+      };
+    }
+    throw err;
+  }
 };
 
 // ─── Action ───────────────────────────────────────────────────────────────────
@@ -42,19 +61,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const dateRange = getDateRange(preset);
 
   if (intent === "refresh") {
-    await loadBestSellers(admin, shopId, dateRange, true);
+    try {
+      await loadBestSellers(admin, shopId, dateRange, true);
+    } catch (err) {
+      if (PCDPermissionError.is(err)) {
+        return { success: false, errorType: "PCD_PERMISSION_REQUIRED", message: err instanceof Error ? err.message : "Order access not approved." } satisfies PcdPermissionError;
+      }
+      throw err;
+    }
     return null;
-  }
-
-  if (intent === "export_csv") {
-    const { rows } = await loadBestSellers(admin, shopId, dateRange);
-    const csv = bestSellersToCsv(rows);
-    return new Response(csv, {
-      headers: {
-        "Content-Type": "text/csv",
-        "Content-Disposition": `attachment; filename="best-sellers-${dateRange.startDate}-${dateRange.endDate}.csv"`,
-      },
-    });
   }
 
   return null;
@@ -63,7 +78,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function BestSellersRoute() {
-  const { rows, cachedAt, dateRange, rangeKey, preset } = useLoaderData<typeof loader>();
+  const { rows, cachedAt, dateRange, rangeKey, preset, pcdError } = useLoaderData<typeof loader>();
+
+  if (pcdError) {
+    return <PcdPermissionEmptyState />;
+  }
+
+  if (!rows || !cachedAt) return null;
 
   return (
     <s-stack direction="block" gap="base">
@@ -73,9 +94,9 @@ export default function BestSellersRoute() {
           <s-text>Date Range:</s-text>
           <s-stack direction="inline" gap="small-200">
             {PRESETS.map((p) => (
-              <a key={p.value} href={`/app/product-sales/best-sellers?preset=${p.value}`} style={{ textDecoration: "none" }}>
+              <Link key={p.value} to={`/app/product-sales/best-sellers?preset=${p.value}`} style={{ textDecoration: "none" }}>
                 <s-button variant={preset === p.value ? "primary" : "secondary"}>{p.label}</s-button>
-              </a>
+              </Link>
             ))}
           </s-stack>
           <div style={{ marginLeft: "auto" }}>

@@ -2,6 +2,8 @@ import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { Outlet, useLocation, NavLink, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
+import { PCDPermissionError } from "../types/product-sales";
+import { PcdPermissionEmptyState } from "../components/product-sales/PcdPermissionEmptyState";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
@@ -41,10 +43,21 @@ export default function ProductSalesLayout() {
 
 export function ErrorBoundary() {
   const error = useRouteError();
-  // Shopify throws Response objects for auth redirects — let boundary handle them
+
   if (error instanceof Response) {
     return boundary.error(error);
   }
+
+  // Catches: PCDPermissionError instance, name-matched Error, errorType object,
+  // OR a plain Error thrown by the Shopify SDK with the PCD message
+  if (PCDPermissionError.is(error)) {
+    return (
+      <s-page heading="Product Sales Intelligence">
+        <PcdPermissionEmptyState />
+      </s-page>
+    );
+  }
+
   return (
     <s-page heading="Product Sales Intelligence">
       <s-section>

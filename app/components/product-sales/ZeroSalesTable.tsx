@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useFetcher } from "react-router";
 import type { ZeroSaleRow } from "../../types/product-sales";
+import { zeroSalesToCsv, downloadCsv } from "../../services/product-sales/csv";
 
 const PAGE_SIZE = 25;
 
@@ -60,11 +61,12 @@ export function ZeroSalesTable({ rows, dateRange, cachedAt }: Props) {
               Refresh
             </s-button>
           </fetcher.Form>
-          <fetcher.Form method="post">
-            <input type="hidden" name="_intent" value="export_csv" />
-            <input type="hidden" name="dateRange" value={dateRange} />
-            <s-button variant="secondary" type="submit">Export CSV</s-button>
-          </fetcher.Form>
+          <s-button
+            variant="secondary"
+            onClick={() => downloadCsv(`zero-sales-${dateRange}.csv`, zeroSalesToCsv(filtered))}
+          >
+            Export CSV
+          </s-button>
         </div>
       </s-stack>
 

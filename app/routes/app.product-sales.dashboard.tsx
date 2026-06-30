@@ -4,7 +4,9 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { buildReport, getDateRange } from "../services/product-sales/reports.server";
 import { SummaryCards } from "../components/product-sales/SummaryCards";
-import type { DatePreset, ReportResult } from "../types/product-sales";
+import { PcdPermissionEmptyState } from "../components/product-sales/PcdPermissionEmptyState";
+import { PCDPermissionError } from "../types/product-sales";
+import type { DatePreset, ReportResult, PcdPermissionError } from "../types/product-sales";
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
@@ -18,9 +20,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const customEnd = url.searchParams.get("end") ?? undefined;
   const dateRange = getDateRange(preset, customStart, customEnd);
 
-  const report = await buildReport(admin, shopId, dateRange);
-
-  return { report, preset };
+  try {
+    const report = await buildReport(admin, shopId, dateRange);
+    return { report, preset, pcdError: null as PcdPermissionError | null };
+  } catch (err) {
+    if (PCDPermissionError.is(err)) {
+      return {
+        report: null as ReportResult | null,
+        preset,
+        pcdError: {
+          success: false,
+          errorType: "PCD_PERMISSION_REQUIRED",
+          message: err instanceof Error ? err.message : "Order access not approved.",
+        } satisfies PcdPermissionError,
+      };
+    }
+    throw err;
+  }
 };
 
 // ─── Action (Refresh) ─────────────────────────────────────────────────────────
@@ -34,7 +50,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const customEnd = formData.get("end") as string | undefined;
   const dateRange = getDateRange(preset, customStart ?? undefined, customEnd ?? undefined);
 
-  await buildReport(admin, shopId, dateRange, true);
+  try {
+    await buildReport(admin, shopId, dateRange, true);
+  } catch (err) {
+    if (PCDPermissionError.is(err)) {
+      return {
+        success: false,
+        errorType: "PCD_PERMISSION_REQUIRED",
+        message: err instanceof Error ? err.message : "Order access not approved.",
+      } satisfies PcdPermissionError;
+    }
+    throw err;
+  }
   return null;
 };
 
@@ -80,7 +107,13 @@ function DateRangeBar({ preset, report }: { preset: DatePreset; report: ReportRe
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function ProductSalesDashboard() {
-  const { report, preset } = useLoaderData<typeof loader>();
+  const { report, preset, pcdError } = useLoaderData<typeof loader>();
+
+  if (pcdError) {
+    return <PcdPermissionEmptyState />;
+  }
+
+  if (!report) return null;
 
   return (
     <s-stack direction="block" gap="base">
