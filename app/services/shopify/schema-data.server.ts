@@ -129,3 +129,56 @@ export async function fetchShopDomain(admin: AdminClient): Promise<string> {
   const json = (await response.json()) as ShopResponse;
   return json.data.shop.primaryDomain.url;
 }
+
+// ── Single product (for the validation endpoint) ──────────────────────────────
+
+const SINGLE_PRODUCT_QUERY = `#graphql
+  query GetProductForValidation($id: ID!) {
+    product(id: $id) {
+      id
+      title
+      handle
+      onlineStoreUrl
+      totalInventory
+      vendor
+      description
+      featuredImage {
+        url
+      }
+      priceRange {
+        minVariantPrice {
+          amount
+          currencyCode
+        }
+      }
+      variants(first: 1) {
+        nodes {
+          sku
+          compareAtPrice
+        }
+      }
+    }
+  }
+`;
+
+export interface ProductForValidation extends ShopifyProduct {
+  variants: {
+    nodes: Array<{ sku: string; compareAtPrice: string | null }>;
+  };
+}
+
+interface SingleProductResponse {
+  data: { product: ProductForValidation | null };
+}
+
+/** Fetch a single product with the fields needed to generate + validate its schema. */
+export async function fetchProductForValidation(
+  admin: AdminClient,
+  productId: string,
+): Promise<ProductForValidation | null> {
+  const response = await admin.graphql(SINGLE_PRODUCT_QUERY, {
+    variables: { id: productId },
+  });
+  const json = (await response.json()) as SingleProductResponse;
+  return json.data.product;
+}

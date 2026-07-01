@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import type { BreadcrumbSchemaData, BreadcrumbItem, ValidationError } from "../../types/schema-builder";
-import { getFieldError } from "../../services/schema/validators";
+import { getFieldError } from "../../services/schema/form-validators";
 
 interface BreadcrumbSchemaFormProps {
   data: BreadcrumbSchemaData;

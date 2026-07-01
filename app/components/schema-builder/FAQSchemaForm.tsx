@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import type { FAQSchemaData, FAQItem, ValidationError } from "../../types/schema-builder";
-import { getFieldError } from "../../services/schema/validators";
+import { getFieldError } from "../../services/schema/form-validators";
 
 interface FAQSchemaFormProps {
   data: FAQSchemaData;

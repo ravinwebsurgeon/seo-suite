@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState } from "react";
 import type { elements } from "@shopify/polaris-types";
 import type { ProductSchemaData, ValidationError, ShopifyProduct } from "../../types/schema-builder";
-import { getFieldError } from "../../services/schema/validators";
+import { getFieldError } from "../../services/schema/form-validators";
 
 interface ProductSchemaFormProps {
   data: ProductSchemaData;

@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef } from "react";
 import type { LoaderFunctionArgs, HeadersFunction } from "react-router";
 import { useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -23,7 +23,8 @@ import {
   validateArticle,
   validateBreadcrumb,
   validateFAQ,
-} from "../services/schema/validators";
+} from "../services/schema/form-validators";
+import { validateSchema } from "../services/schema/validators";
 
 import { SchemaTypeSelector } from "../components/schema-builder/SchemaTypeSelector";
 import { ProductSchemaForm } from "../components/schema-builder/ProductSchemaForm";
@@ -32,6 +33,10 @@ import { BreadcrumbSchemaForm } from "../components/schema-builder/BreadcrumbSch
 import { FAQSchemaForm } from "../components/schema-builder/FAQSchemaForm";
 import { JsonPreview } from "../components/schema-builder/JsonPreview";
 import { LiquidPreview } from "../components/schema-builder/LiquidPreview";
+import {
+  ValidationReport,
+  type ValidationReportHandle,
+} from "../components/schema-builder/ValidationReport";
 
 import type {
   SchemaType,
@@ -41,6 +46,7 @@ import type {
   FAQSchemaData,
   ValidationError,
 } from "../types/schema-builder";
+import type { SchemaValidationResult } from "../types/schema-validation";
 
 // ─── Loader ──────────────────────────────────────────────────────────────────
 
@@ -98,6 +104,8 @@ export default function SchemaBuilder() {
   const [errors, setErrors] = useState<ValidationError[]>([]);
   const [showLiquid, setShowLiquid] = useState(false);
   const [validated, setValidated] = useState(false);
+  const [report, setReport] = useState<SchemaValidationResult | null>(null);
+  const reportRef = useRef<ValidationReportHandle>(null);
 
   // ── Live JSON-LD generation ──────────────────────────────────────────────
 
@@ -135,6 +143,20 @@ export default function SchemaBuilder() {
     setErrors(errs);
     return errs.length === 0;
   }, [activeSchema, productData, articleData, breadcrumbData, faqData]);
+
+  // Run the full validation engine on the generated JSON-LD and open the report.
+  const handleRunValidation = useCallback(() => {
+    setValidated(true);
+    validate(); // also refresh inline field errors
+    const result = validateSchema(activeSchema, schema);
+    setReport(result);
+    reportRef.current?.open();
+    if (result.valid) {
+      shopify.toast.show(`Schema valid — health score ${result.score}/100`);
+    } else {
+      shopify.toast.show(`${result.errors.length} blocking error(s) found`, { isError: true });
+    }
+  }, [activeSchema, schema, validate, shopify]);
 
   // Clear errors when data changes (show errors only after first validation attempt)
   const handleSchemaChange = useCallback((type: SchemaType) => {
@@ -236,18 +258,18 @@ export default function SchemaBuilder() {
 
   return (
     <s-page heading="Schema Markup Builder">
-      <s-button
-        slot="primary-action"
-        variant="primary"
-        onClick={() => {
-          setValidated(true);
-          if (validate()) {
-            shopify.toast.show("Schema is valid — ready to copy or download");
-          }
-        }}
-      >
+      <s-button slot="primary-action" variant="primary" onClick={handleRunValidation}>
         Validate Schema
       </s-button>
+
+      <ValidationReport ref={reportRef} result={report} />
+
+      {/* Score summary chip once a validation has run */}
+      {report && (
+        <s-button slot="secondary-actions" variant="tertiary" onClick={() => reportRef.current?.open()}>
+          {`View report — ${report.score}/100 (${report.status})`}
+        </s-button>
+      )}
 
       {/* ── Schema type selector ── */}
       <s-section heading="Schema Type">
