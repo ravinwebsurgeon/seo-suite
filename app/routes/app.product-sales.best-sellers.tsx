@@ -5,6 +5,7 @@ import { authenticate } from "../shopify.server";
 import { loadBestSellers, getDateRange } from "../services/product-sales/reports.server";
 import { buildDateRangeKey } from "../services/product-sales/cache.server";
 import { BestSellersTable } from "../components/product-sales/BestSellersTable";
+import { useSalesAutoRefresh } from "../components/product-sales/useSalesAutoRefresh";
 import { PcdPermissionEmptyState } from "../components/product-sales/PcdPermissionEmptyState";
 import { PCDPermissionError } from "../types/product-sales";
 import type { DatePreset, BestSellerRow, PcdPermissionError } from "../types/product-sales";
@@ -79,6 +80,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 export default function BestSellersRoute() {
   const { rows, cachedAt, dateRange, rangeKey, preset, pcdError } = useLoaderData<typeof loader>();
+  const autoRefreshing = useSalesAutoRefresh(cachedAt, { preset });
 
   if (pcdError) {
     return <PcdPermissionEmptyState />;
@@ -101,6 +103,7 @@ export default function BestSellersRoute() {
           </s-stack>
           <div style={{ marginLeft: "auto" }}>
             <s-text>
+              {autoRefreshing ? "Updating latest data… · " : ""}
               {dateRange.startDate} → {dateRange.endDate} · {rows.length.toLocaleString()} products
             </s-text>
           </div>
@@ -108,7 +111,7 @@ export default function BestSellersRoute() {
       </s-section>
 
       <s-section heading="Best Sellers">
-        <BestSellersTable rows={rows} dateRange={rangeKey} cachedAt={cachedAt} />
+        <BestSellersTable rows={rows} dateRange={rangeKey} preset={preset} cachedAt={cachedAt} />
       </s-section>
     </s-stack>
   );

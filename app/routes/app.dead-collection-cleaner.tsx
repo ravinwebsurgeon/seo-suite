@@ -5,7 +5,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "@shopify/app-bridge-react";
 
 import { authenticate } from "../shopify.server";
-import { fetchAllCollections, deleteCollection, createUrlRedirect, addProductToCollection } from "../services/shopify/collections.server";
+import { fetchAllCollections, bulkDeleteCollections, createUrlRedirect, addProductToCollection } from "../services/shopify/collections.server";
 import { fetchOrphanProducts } from "../services/shopify/products.server";
 import { StatCards } from "../components/dead-collection-cleaner/StatCards";
 import { CollectionsTable } from "../components/dead-collection-cleaner/CollectionsTable";
@@ -66,10 +66,15 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<ActionRes
       }
     }
 
-    const results = await Promise.all(ids.map((id) => deleteCollection(admin, id)));
-    const errors = results.flatMap((r) => r.userErrors);
-    if (errors.length > 0) {
-      return { success: false, intent, error: errors.map((e) => e.message).join(", ") };
+    // Bulk deletes are dispatched through a 2 req/s queue to stay within
+    // Shopify's Admin API rate limit and avoid THROTTLED errors.
+    const { deletedCount, userErrors } = await bulkDeleteCollections(admin, ids);
+    if (userErrors.length > 0) {
+      const error =
+        deletedCount > 0
+          ? `Deleted ${deletedCount} of ${ids.length}. Errors: ${userErrors.map((e) => e.message).join(", ")}`
+          : userErrors.map((e) => e.message).join(", ");
+      return { success: false, intent, error };
     }
     return { success: true, intent };
   }

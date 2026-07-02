@@ -1,4 +1,8 @@
 import type { CollectionNode, DeleteResult } from "../../types/dead-collection-cleaner";
+import { runWithRateLimit } from "./rate-limit.server";
+
+// Shopify Admin API rate limit for bulk collection deletes (requests/second).
+const DELETE_RATE_PER_SECOND = 2;
 
 const COLLECTIONS_QUERY = `#graphql
   query GetCollections($first: Int!, $after: String) {
@@ -116,6 +120,50 @@ export async function deleteCollection(
     data: { collectionDelete: DeleteResult };
   };
   return json.data.collectionDelete;
+}
+
+export interface BulkDeleteResult {
+  deletedCount: number;
+  userErrors: Array<{ field: string[] | null; message: string }>;
+}
+
+/**
+ * Deletes multiple collections while respecting Shopify's Admin API rate limit.
+ *
+ * Deletes are dispatched through a queue capped at {@link DELETE_RATE_PER_SECOND}
+ * requests/second to avoid `THROTTLED` errors on large selections. Failures on
+ * individual collections (GraphQL userErrors or thrown network/API errors) are
+ * collected rather than aborting the whole batch, so a partial success still
+ * removes everything it can.
+ */
+export async function bulkDeleteCollections(
+  admin: AdminClient,
+  collectionIds: string[],
+): Promise<BulkDeleteResult> {
+  const settled = await runWithRateLimit(
+    collectionIds.map((id) => () => deleteCollection(admin, id)),
+    DELETE_RATE_PER_SECOND,
+  );
+
+  const userErrors: BulkDeleteResult["userErrors"] = [];
+  let deletedCount = 0;
+
+  settled.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      const errors = result.value.userErrors;
+      if (errors.length > 0) {
+        userErrors.push(...errors);
+      } else {
+        deletedCount += 1;
+      }
+    } else {
+      const message =
+        result.reason instanceof Error ? result.reason.message : "Failed to delete collection";
+      userErrors.push({ field: ["id"], message: `${collectionIds[index]}: ${message}` });
+    }
+  });
+
+  return { deletedCount, userErrors };
 }
 
 export async function createUrlRedirect(

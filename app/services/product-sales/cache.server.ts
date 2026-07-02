@@ -31,6 +31,16 @@ export async function isSalesCacheFresh(shopId: string, dateRange: string): Prom
   return ageMinutes !== null && ageMinutes < CACHE_TTL_MINUTES;
 }
 
+/** Timestamp of when this sales-cache entry was written (null if none). */
+export async function getSalesCacheTimestamp(shopId: string, dateRange: string): Promise<Date | null> {
+  const rows = await db
+    .select({ createdAt: salesCache.createdAt })
+    .from(salesCache)
+    .where(and(eq(salesCache.shopId, shopId), eq(salesCache.dateRange, dateRange)))
+    .limit(1);
+  return rows.length ? new Date(rows[0].createdAt) : null;
+}
+
 export async function getSalesCache(shopId: string, dateRange: string): Promise<SalesCache[]> {
   return db
     .select()
@@ -89,6 +99,16 @@ export async function isInventoryCacheFresh(shopId: string): Promise<boolean> {
 
 export async function getInventoryCache(shopId: string): Promise<InventoryCache[]> {
   return db.select().from(inventoryCache).where(eq(inventoryCache.shopId, shopId));
+}
+
+/** Timestamp of when the inventory cache was last written (null if none). */
+export async function getInventoryCacheTimestamp(shopId: string): Promise<Date | null> {
+  const rows = await db
+    .select({ updatedAt: inventoryCache.updatedAt })
+    .from(inventoryCache)
+    .where(eq(inventoryCache.shopId, shopId))
+    .limit(1);
+  return rows.length ? new Date(rows[0].updatedAt) : null;
 }
 
 export async function writeInventoryCache(
