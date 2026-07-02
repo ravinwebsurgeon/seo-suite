@@ -4,6 +4,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { loadHighDemand } from "../services/product-sales/reports.server";
 import { HighDemandTable } from "../components/product-sales/HighDemandTable";
+import { useSalesAutoRefresh } from "../components/product-sales/useSalesAutoRefresh";
 import { PcdPermissionEmptyState } from "../components/product-sales/PcdPermissionEmptyState";
 import { PCDPermissionError } from "../types/product-sales";
 import type { HighDemandRow, PcdPermissionError } from "../types/product-sales";
@@ -60,6 +61,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 export default function HighDemandRoute() {
   const { rows, cachedAt, pcdError } = useLoaderData<typeof loader>();
+  const autoRefreshing = useSalesAutoRefresh(cachedAt);
 
   if (pcdError) {
     return <PcdPermissionEmptyState />;
@@ -77,7 +79,10 @@ export default function HighDemandRoute() {
             Velocity threshold: &gt; 0.5
           </s-text>
           <div style={{ marginLeft: "auto" }}>
-            <s-text>{rows.length.toLocaleString()} products flagged</s-text>
+            <s-text>
+              {autoRefreshing ? "Updating latest data… · " : ""}
+              {rows.length.toLocaleString()} products flagged
+            </s-text>
           </div>
         </s-stack>
       </s-section>

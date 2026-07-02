@@ -12,6 +12,8 @@ import {
   isInventoryCacheFresh,
   getSalesCache,
   getInventoryCache,
+  getSalesCacheTimestamp,
+  getInventoryCacheTimestamp,
   writeSalesCache,
   writeInventoryCache,
 } from "./cache.server";
@@ -72,10 +74,16 @@ export async function buildReport(
   }
 
   // ── Read from cache ──
-  const [salesRows, inventoryRows] = await Promise.all([
+  const [salesRows, inventoryRows, salesTs, inventoryTs] = await Promise.all([
     getSalesCache(shopId, rangeKey),
     getInventoryCache(shopId),
+    getSalesCacheTimestamp(shopId, rangeKey),
+    getInventoryCacheTimestamp(shopId),
   ]);
+
+  // Real "cached at" = the oldest of the two cached data sources this report
+  // draws from, so the UI can tell how stale the data actually is.
+  const cachedAt = oldestTimestamp(salesTs, inventoryTs);
 
   // Build lookup maps
   const salesByKey = new Map(
@@ -166,8 +174,15 @@ export async function buildReport(
     bestSellers,
     zeroSales,
     highDemand,
-    cachedAt: new Date().toISOString(),
+    cachedAt,
   };
+}
+
+/** ISO string of the oldest non-null timestamp, or "now" if all are null. */
+function oldestTimestamp(...dates: (Date | null)[]): string {
+  const valid = dates.filter((d): d is Date => d != null);
+  if (!valid.length) return new Date().toISOString();
+  return valid.reduce((a, b) => (a.getTime() <= b.getTime() ? a : b)).toISOString();
 }
 
 // ─── Per-section loaders (used by individual route loaders) ───────────────────
@@ -203,7 +218,10 @@ export async function loadHighDemand(
     await writeInventoryCache(shopId, products);
   }
 
-  const inventoryRows = await getInventoryCache(shopId);
+  const [inventoryRows, inventoryTs] = await Promise.all([
+    getInventoryCache(shopId),
+    getInventoryCacheTimestamp(shopId),
+  ]);
   const inventoryByKey = new Map(
     inventoryRows.map((r) => [`${r.productId}__${r.variantId}`, r]),
   );
@@ -233,5 +251,5 @@ export async function loadHighDemand(
   }
 
   highDemand.sort((a, b) => b.salesVelocity - a.salesVelocity);
-  return { rows: highDemand, cachedAt: new Date().toISOString() };
+  return { rows: highDemand, cachedAt: (inventoryTs ?? new Date()).toISOString() };
 }

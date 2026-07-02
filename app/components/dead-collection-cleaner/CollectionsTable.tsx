@@ -8,18 +8,10 @@ function sortCollections(collections: Collection[], sort: SortState): Collection
   return [...collections].sort((a, b) => {
     let cmp = 0;
     switch (sort.column) {
-      case "title":
-        cmp = a.title.localeCompare(b.title);
-        break;
-      case "type":
-        cmp = a.type.localeCompare(b.type);
-        break;
-      case "productsCount":
-        cmp = a.productsCount - b.productsCount;
-        break;
-      case "updatedAt":
-        cmp = new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
-        break;
+      case "title": cmp = a.title.localeCompare(b.title); break;
+      case "type": cmp = a.type.localeCompare(b.type); break;
+      case "productsCount": cmp = a.productsCount - b.productsCount; break;
+      case "updatedAt": cmp = new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime(); break;
     }
     return sort.direction === "asc" ? cmp : -cmp;
   });
@@ -27,9 +19,7 @@ function sortCollections(collections: Collection[], sort: SortState): Collection
 
 function formatDate(isoString: string): string {
   return new Date(isoString).toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
+    year: "numeric", month: "short", day: "numeric",
   });
 }
 
@@ -43,11 +33,8 @@ interface SortButtonProps {
 function SortButton({ column, label, currentSort, onSort }: SortButtonProps) {
   const isActive = currentSort.column === column;
   const icon = isActive
-    ? currentSort.direction === "asc"
-      ? "sort-ascending"
-      : "sort-descending"
+    ? currentSort.direction === "asc" ? "sort-ascending" : "sort-descending"
     : "sort";
-
   return (
     <s-button variant="tertiary" onClick={() => onSort(column)}>
       <s-stack direction="inline" gap="small-100" alignItems="center">
@@ -68,16 +55,10 @@ interface PaginationControlsProps {
 }
 
 function PaginationControls({
-  currentPage,
-  totalPages,
-  totalItems,
-  pageSize,
-  onPageChange,
-  onPageSizeChange,
+  currentPage, totalPages, totalItems, pageSize, onPageChange, onPageSizeChange,
 }: PaginationControlsProps) {
   const start = totalItems === 0 ? 0 : (currentPage - 1) * pageSize + 1;
   const end = Math.min(currentPage * pageSize, totalItems);
-
   return (
     <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
       <s-stack direction="inline" gap="small-200" alignItems="center">
@@ -91,30 +72,18 @@ function PaginationControls({
           }
         >
           {PAGE_SIZE_OPTIONS.map((size) => (
-            <s-option key={size} value={size.toString()}>
-              {size}
-            </s-option>
+            <s-option key={size} value={size.toString()}>{size}</s-option>
           ))}
         </s-select>
       </s-stack>
-
       <s-text tone="neutral">
         {totalItems === 0 ? "0 items" : `${start}–${end} of ${totalItems}`}
       </s-text>
-
       <s-stack direction="inline" gap="small-200">
-        <s-button
-          variant="secondary"
-          disabled={currentPage === 1 || undefined}
-          onClick={() => onPageChange(currentPage - 1)}
-        >
+        <s-button variant="secondary" disabled={currentPage === 1 || undefined} onClick={() => onPageChange(currentPage - 1)}>
           Previous
         </s-button>
-        <s-button
-          variant="secondary"
-          disabled={currentPage === totalPages || undefined}
-          onClick={() => onPageChange(currentPage + 1)}
-        >
+        <s-button variant="secondary" disabled={currentPage === totalPages || undefined} onClick={() => onPageChange(currentPage + 1)}>
           Next
         </s-button>
       </s-stack>
@@ -146,7 +115,6 @@ export function CollectionsTable({
   const startIndex = (clampedPage - 1) * pageSize;
   const paginated = sorted.slice(startIndex, startIndex + pageSize);
 
-  // Reset to page 1 and clear selection when the dataset changes (e.g. after deletion)
   useEffect(() => {
     setCurrentPage(1);
     setSelectedIds(new Set());
@@ -165,66 +133,41 @@ export function CollectionsTable({
     setCurrentPage(1);
   }, []);
 
-  // Select-all only operates on the current page; selections on other pages are preserved
-  const allOnPageSelected =
-    paginated.length > 0 && paginated.every((c) => selectedIds.has(c.id));
-  const someOnPageSelected =
-    paginated.some((c) => selectedIds.has(c.id)) && !allOnPageSelected;
+  const allOnPageSelected = paginated.length > 0 && paginated.every((c) => selectedIds.has(c.id));
+  const someOnPageSelected = paginated.some((c) => selectedIds.has(c.id)) && !allOnPageSelected;
 
-  const handleSelectAll = useCallback(
-    (e: Event) => {
-      const checked = (e.target as HTMLInputElement).checked;
-      setSelectedIds((prev) => {
+  // Mirror MetaTable exactly: onClick, toggle from current React state, never read e.target
+  const handleSelectAll = useCallback(() => {
+    setSelectedIds((prev) => {
+      const allSelected = paginated.length > 0 && paginated.every((c) => prev.has(c.id));
+      if (allSelected) {
         const next = new Set(prev);
-        for (const c of paginated) {
-          if (checked) {
-            next.add(c.id);
-          } else {
-            next.delete(c.id);
-          }
-        }
+        for (const c of paginated) next.delete(c.id);
         return next;
-      });
-    },
-    [paginated],
-  );
+      }
+      const next = new Set(prev);
+      for (const c of paginated) next.add(c.id);
+      return next;
+    });
+  }, [paginated]);
 
-  const handleSelectRow = useCallback(
-    (id: string) => (e: Event) => {
-      const checked = (e.target as HTMLInputElement).checked;
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        if (checked) {
-          next.add(id);
-        } else {
-          next.delete(id);
-        }
-        return next;
-      });
-    },
-    [],
-  );
-
-  const handleDelete = () => {
-    onDeleteSelected([...selectedIds]);
-  };
+  const handleSelectOne = useCallback((id: string, currentlySelected: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      currentlySelected ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }, []);
 
   const handleExport = () => {
-    // Export selected IDs, or all items when nothing is selected
     const ids = selectedIds.size > 0 ? [...selectedIds] : sorted.map((c) => c.id);
     onExportCsv(ids);
   };
 
   const collectionTypeBadge = (c: Collection) => {
-    if (c.isBroken) {
-      return <s-badge tone="critical">Broken Automated</s-badge>;
-    }
-    if (c.isEmpty) {
-      return <s-badge tone="warning">Empty</s-badge>;
-    }
-    if (c.type === "automated") {
-      return <s-badge tone="neutral">Automated</s-badge>;
-    }
+    if (c.isBroken) return <s-badge tone="critical">Broken Automated</s-badge>;
+    if (c.isEmpty) return <s-badge tone="warning">Empty</s-badge>;
+    if (c.type === "automated") return <s-badge tone="neutral">Automated</s-badge>;
     return <s-badge tone="neutral">Manual</s-badge>;
   };
 
@@ -238,26 +181,17 @@ export function CollectionsTable({
 
   return (
     <s-stack direction="block" gap="base">
+      {/* Bulk action bar — mirrors MetaTable's raw flex div approach */}
       {selectedIds.size > 0 && (
-        <s-box
-          padding="base"
-          borderWidth="base"
-          borderRadius="base"
-          background="subdued"
-        >
-          <s-stack
-            direction="inline"
-            gap="base"
-            alignItems="center"
-            justifyContent="space-between"
-          >
-            <s-text>
+        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+          <s-stack direction="block" gap="small-200">
+            <s-text type="strong">
               {selectedIds.size} collection{selectedIds.size !== 1 ? "s" : ""} selected
             </s-text>
-            <s-button-group>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
               <s-button
                 tone="critical"
-                onClick={handleDelete}
+                onClick={() => onDeleteSelected([...selectedIds])}
                 disabled={isDeleting || undefined}
                 {...(isDeleting ? { loading: true } : {})}
               >
@@ -266,7 +200,7 @@ export function CollectionsTable({
               <s-button variant="secondary" onClick={handleExport}>
                 Export CSV
               </s-button>
-            </s-button-group>
+            </div>
           </s-stack>
         </s-box>
       )}
@@ -282,6 +216,7 @@ export function CollectionsTable({
       <s-table>
         <s-table-header-row>
           <s-table-header>
+            {/* onChange with no event arg — mirrors MetaTable's handleSelectAll */}
             <s-checkbox
               label="Select all on page"
               labelAccessibilityVisibility="exclusive"
@@ -294,65 +229,54 @@ export function CollectionsTable({
             <SortButton column="title" label="Collection" currentSort={sort} onSort={handleSort} />
           </s-table-header>
           <s-table-header>
-            <SortButton
-              column="type"
-              label="Type / Status"
-              currentSort={sort}
-              onSort={handleSort}
-            />
+            <SortButton column="type" label="Type / Status" currentSort={sort} onSort={handleSort} />
           </s-table-header>
           <s-table-header format="numeric">
-            <SortButton
-              column="productsCount"
-              label="Products"
-              currentSort={sort}
-              onSort={handleSort}
-            />
+            <SortButton column="productsCount" label="Products" currentSort={sort} onSort={handleSort} />
           </s-table-header>
           <s-table-header>
-            <SortButton
-              column="updatedAt"
-              label="Last Updated"
-              currentSort={sort}
-              onSort={handleSort}
-            />
+            <SortButton column="updatedAt" label="Last Updated" currentSort={sort} onSort={handleSort} />
           </s-table-header>
           <s-table-header>Actions</s-table-header>
         </s-table-header-row>
         <s-table-body>
-          {paginated.map((collection) => (
-            <s-table-row key={collection.id}>
-              <s-table-cell>
-                <s-checkbox
-                  label={`Select ${collection.title}`}
-                  labelAccessibilityVisibility="exclusive"
-                  checked={selectedIds.has(collection.id)}
-                  onChange={handleSelectRow(collection.id)}
-                />
-              </s-table-cell>
-              <s-table-cell>
-                <s-text>{collection.title}</s-text>
-              </s-table-cell>
-              <s-table-cell>{collectionTypeBadge(collection)}</s-table-cell>
-              <s-table-cell>
-                <s-text>{collection.productsCount.toString()}</s-text>
-              </s-table-cell>
-              <s-table-cell>
-                <s-text>{formatDate(collection.updatedAt)}</s-text>
-              </s-table-cell>
-              <s-table-cell>
-                <s-button
-                  variant="tertiary"
-                  tone="critical"
-                  onClick={() => onDeleteSelected([collection.id])}
-                  disabled={isDeleting || undefined}
-                  {...(isDeleting ? { loading: true } : {})}
-                >
-                  Delete
-                </s-button>
-              </s-table-cell>
-            </s-table-row>
-          ))}
+          {paginated.map((collection) => {
+            const isSelected = selectedIds.has(collection.id);
+            return (
+              <s-table-row key={collection.id}>
+                <s-table-cell>
+                  {/* onClick + !isSelected mirrors MetaRow's onChange={() => onSelect(id, !selected)) */}
+                  <s-checkbox
+                    label={`Select ${collection.title}`}
+                    labelAccessibilityVisibility="exclusive"
+                    checked={isSelected}
+                    onChange={() => handleSelectOne(collection.id, isSelected)}
+                  />
+                </s-table-cell>
+                <s-table-cell>
+                  <s-text>{collection.title}</s-text>
+                </s-table-cell>
+                <s-table-cell>{collectionTypeBadge(collection)}</s-table-cell>
+                <s-table-cell>
+                  <s-text>{collection.productsCount.toString()}</s-text>
+                </s-table-cell>
+                <s-table-cell>
+                  <s-text>{formatDate(collection.updatedAt)}</s-text>
+                </s-table-cell>
+                <s-table-cell>
+                  <s-button
+                    variant="tertiary"
+                    tone="critical"
+                    onClick={() => onDeleteSelected([collection.id])}
+                    disabled={isDeleting || undefined}
+                    {...(isDeleting ? { loading: true } : {})}
+                  >
+                    Delete
+                  </s-button>
+                </s-table-cell>
+              </s-table-row>
+            );
+          })}
         </s-table-body>
       </s-table>
 

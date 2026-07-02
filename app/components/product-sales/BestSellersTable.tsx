@@ -12,6 +12,7 @@ function fmtCurrency(n: number) {
 interface Props {
   rows: BestSellerRow[];
   dateRange: string;
+  preset: string;
   cachedAt: string;
 }
 
@@ -26,7 +27,7 @@ const COLUMNS: ColumnDef[] = [
   { key: "inventoryQuantity", label: "Inventory", align: "right" },
 ];
 
-export function BestSellersTable({ rows, dateRange, cachedAt }: Props) {
+export function BestSellersTable({ rows, dateRange, preset, cachedAt }: Props) {
   const fetcher = useFetcher();
   const [sortKey, setSortKey] = useState<BestSellerSortKey>("unitsSold");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -75,7 +76,7 @@ export function BestSellersTable({ rows, dateRange, cachedAt }: Props) {
           <s-text>Cached at {cachedLabel}</s-text>
           <fetcher.Form method="post">
             <input type="hidden" name="_intent" value="refresh" />
-            <input type="hidden" name="dateRange" value={dateRange} />
+            <input type="hidden" name="preset" value={preset} />
             <s-button
               variant="secondary"
               type="submit"

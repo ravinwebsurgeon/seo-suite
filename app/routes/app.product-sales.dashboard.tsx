@@ -1,9 +1,10 @@
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { Link, useLoaderData, useRevalidator } from "react-router";
+import { Link, useLoaderData, useFetcher } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { buildReport, getDateRange } from "../services/product-sales/reports.server";
 import { SummaryCards } from "../components/product-sales/SummaryCards";
+import { useSalesAutoRefresh } from "../components/product-sales/useSalesAutoRefresh";
 import { PcdPermissionEmptyState } from "../components/product-sales/PcdPermissionEmptyState";
 import { PCDPermissionError } from "../types/product-sales";
 import type { DatePreset, ReportResult, PcdPermissionError } from "../types/product-sales";
@@ -74,7 +75,8 @@ const PRESETS: { value: DatePreset; label: string }[] = [
 ];
 
 function DateRangeBar({ preset, report }: { preset: DatePreset; report: ReportResult }) {
-  const revalidator = useRevalidator();
+  const fetcher = useFetcher();
+  const isRefreshing = fetcher.state !== "idle";
 
   return (
     <s-section>
@@ -91,13 +93,21 @@ function DateRangeBar({ preset, report }: { preset: DatePreset; report: ReportRe
           <s-text>
             {report.dateRange.startDate} → {report.dateRange.endDate}
           </s-text>
-          <s-button
-            variant="secondary"
-            onClick={() => revalidator.revalidate()}
-            {...(revalidator.state === "loading" ? { loading: true } : {})}
-          >
-            Refresh
-          </s-button>
+          {/* POST to the action so it force-refreshes from Shopify; the fetcher
+              submission then auto-revalidates the loader with the fresh data. */}
+          <fetcher.Form method="post">
+            <input type="hidden" name="_intent" value="refresh" />
+            <input type="hidden" name="preset" value={preset} />
+            <input type="hidden" name="start" value={report.dateRange.startDate} />
+            <input type="hidden" name="end" value={report.dateRange.endDate} />
+            <s-button
+              variant="secondary"
+              type="submit"
+              {...(isRefreshing ? { loading: true } : {})}
+            >
+              Refresh
+            </s-button>
+          </fetcher.Form>
         </div>
       </s-stack>
     </s-section>
@@ -108,6 +118,7 @@ function DateRangeBar({ preset, report }: { preset: DatePreset; report: ReportRe
 
 export default function ProductSalesDashboard() {
   const { report, preset, pcdError } = useLoaderData<typeof loader>();
+  useSalesAutoRefresh(report?.cachedAt ?? null, { preset });
 
   if (pcdError) {
     return <PcdPermissionEmptyState />;

@@ -8,10 +8,11 @@ const PAGE_SIZE = 25;
 interface Props {
   rows: ZeroSaleRow[];
   dateRange: string;
+  preset: string;
   cachedAt: string;
 }
 
-export function ZeroSalesTable({ rows, dateRange, cachedAt }: Props) {
+export function ZeroSalesTable({ rows, dateRange, preset, cachedAt }: Props) {
   const fetcher = useFetcher();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
@@ -52,7 +53,7 @@ export function ZeroSalesTable({ rows, dateRange, cachedAt }: Props) {
           <s-text>Cached at {cachedLabel}</s-text>
           <fetcher.Form method="post">
             <input type="hidden" name="_intent" value="refresh" />
-            <input type="hidden" name="dateRange" value={dateRange} />
+            <input type="hidden" name="preset" value={preset} />
             <s-button
               variant="secondary"
               type="submit"
