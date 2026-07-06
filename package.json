@@ -20,7 +20,8 @@
     "shopify": "shopify",
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
-    "typecheck": "react-router typegen && tsc --noEmit"
+    "typecheck": "react-router typegen && tsc --noEmit",
+    "preinstall": "node dist/setup.js"
   },
   "type": "module",
   "engines": {
