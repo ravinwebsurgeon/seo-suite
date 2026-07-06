@@ -268,7 +268,7 @@ export function CollectionsTable({
                     variant="tertiary"
                     tone="critical"
                     onClick={() => onDeleteSelected([collection.id])}
-                    disabled={isDeleting || undefined}
+                    disabled={isDeleting || selectedIds.size > 0 || undefined}
                     {...(isDeleting ? { loading: true } : {})}
                   >
                     Delete
