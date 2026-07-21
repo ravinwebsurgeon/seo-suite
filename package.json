@@ -37,7 +37,7 @@
     "@shopify/shopify-app-react-router": "^1.1.0",
     "bullmq": "^5.79.1",
     "diff": "^9.0.0",
-    "drizzle-orm": "^0.43.1",
+    "drizzle-orm": "^0.45.2",
     "ioredis": "^5.11.1",
     "isbot": "^5.1.31",
     "pg": "^8.13.3",
